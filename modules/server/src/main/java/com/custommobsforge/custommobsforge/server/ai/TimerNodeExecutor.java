@@ -21,8 +21,8 @@ public class TimerNodeExecutor implements NodeExecutor {
         boolean repeat = node.getCustomParameterAsBoolean("repeat", false);
 
         // Выведем параметры для отладки
-        LOGGER.info("TimerNodeExecutor: Parameters - duration={}, repeat={} for node {}",
-                duration, repeat, node.getId());
+        executor.logNodeExecution("TimerNode", node.getId(),
+                "duration=" + duration + ", repeat=" + repeat, true);
 
         // Также проверим raw параметр
         if (node.getParameter() != null && !node.getParameter().isEmpty()) {
@@ -75,6 +75,8 @@ public class TimerNodeExecutor implements NodeExecutor {
         if (!timerStartTimes.containsKey(timerId)) {
             LOGGER.info("TimerNodeExecutor: Starting timer for {}", timerId);
             timerStartTimes.put(timerId, currentTime);
+            // ВАЖНОЕ ИЗМЕНЕНИЕ: Сообщаем исполнителю, что нужно больше времени
+            executor.setNodeNeedsMoreTime(true);
             return false; // Сразу возвращаем неудачу, чтобы дать таймеру время работать
         }
 
@@ -91,35 +93,32 @@ public class TimerNodeExecutor implements NodeExecutor {
             if (repeat) {
                 LOGGER.info("TimerNodeExecutor: Timer expired, restarting (repeat=true)");
                 timerStartTimes.put(timerId, currentTime);
+                // Все еще нужно время
+                executor.setNodeNeedsMoreTime(true);
             } else {
                 // Иначе, удаляем таймер
                 LOGGER.info("TimerNodeExecutor: Timer expired, not restarting (repeat=false)");
                 timerStartTimes.remove(timerId);
+                // Больше не нужно времени
+                executor.setNodeNeedsMoreTime(false);
             }
 
-            // Выполняем дочерние узлы
-            LOGGER.info("TimerNodeExecutor: Timer expired, executing child nodes");
-            boolean anyChildSucceeded = false;
+            // Выполняем дочерние узлы, если есть
             List<BehaviorNode> children = executor.getChildNodes(node);
-            if (children.isEmpty()) {
-                LOGGER.warn("TimerNodeExecutor: No child nodes to execute!");
-            }
-
-            for (BehaviorNode child : children) {
-                LOGGER.info("TimerNodeExecutor: Executing child node {} of type {}",
-                        child.getId(), child.getType());
-                if (executor.executeNode(child)) {
-                    anyChildSucceeded = true;
-                    LOGGER.info("TimerNodeExecutor: Child node executed successfully");
-                } else {
-                    LOGGER.warn("TimerNodeExecutor: Child node NOT executed successfully");
+            if (!children.isEmpty()) {
+                for (BehaviorNode child : children) {
+                    LOGGER.info("TimerNodeExecutor: Executing child node {} after timer expired", child.getId());
+                    executor.executeNode(child);
                 }
             }
 
-            return anyChildSucceeded;
+            executor.logNodeExecution("TimerNode", node.getId(), "completed", false);
+            return true;
         }
 
-        LOGGER.info("TimerNodeExecutor: Timer not yet expired, returning false");
-        return false; // Таймер еще работает
+        // Таймер еще работает
+        LOGGER.info("TimerNodeExecutor: Timer not yet expired, continuing");
+        executor.setNodeNeedsMoreTime(true);
+        return false;
     }
 }

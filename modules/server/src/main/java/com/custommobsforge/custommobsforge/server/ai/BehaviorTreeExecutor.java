@@ -20,12 +20,17 @@ public class BehaviorTreeExecutor extends Goal {
     private final Map<String, NodeExecutor> nodeExecutors = new HashMap<>();
     private final List<String> activeNodeIds = new ArrayList<>();
     private String currentRootNodeId;
+    private String currentExecutingNodeId; // Хранит текущий выполняемый узел
+    private boolean nodeNeedsMoreTime = false; // Флаг, указывающий, что узлу нужно больше времени
     private int executionTicks = 0;
     private final int executionInterval = 5; // Обновление каждые 5 тиков (1/4 секунды)
 
+    // Отслеживание выполнения последовательностей
+    private final Map<String, List<BehaviorNode>> pendingSequenceNodes = new HashMap<>();
+    private final Map<String, Integer> sequenceNodeIndex = new HashMap<>();
+
     // Конструктор
     public BehaviorTreeExecutor(CustomMobEntity entity, BehaviorTree tree) {
-
         this.entity = entity;
         this.tree = tree;
 
@@ -95,6 +100,9 @@ public class BehaviorTreeExecutor extends Goal {
     public void stop() {
         // Очищаем активные узлы
         activeNodeIds.clear();
+        pendingSequenceNodes.clear();
+        sequenceNodeIndex.clear();
+        currentExecutingNodeId = null;
     }
 
     @Override
@@ -102,7 +110,7 @@ public class BehaviorTreeExecutor extends Goal {
         // Отладочный вывод при первом тике
         if (executionTicks == 0) {
             LOGGER.info("BehaviorTreeExecutor: First tick for entity {} with root node: {}",
-                        entity.getId(), currentRootNodeId);
+                    entity.getId(), currentRootNodeId);
 
             // Выводим все узлы дерева для отладки
             if (tree != null && tree.getNodes() != null) {
@@ -129,8 +137,29 @@ public class BehaviorTreeExecutor extends Goal {
         if (executionTicks % executionInterval == 0) {
             LOGGER.info("BehaviorTreeExecutor: Executing tree for entity {} at tick {}",
                     entity.getId(), executionTicks);
-            boolean success = executeTree();
-            LOGGER.info("BehaviorTreeExecutor: Tree execution result: {}", success);
+
+            // Если у нас есть узел, который просит больше времени на выполнение (TimerNode, например)
+            if (nodeNeedsMoreTime && currentExecutingNodeId != null) {
+                BehaviorNode node = tree.getNode(currentExecutingNodeId);
+                if (node != null) {
+                    LOGGER.info("BehaviorTreeExecutor: Continuing execution of node {} of type {}",
+                            node.getId(), node.getType());
+                    boolean result = executeNode(node);
+                    LOGGER.info("BehaviorTreeExecutor: Node execution result: {}", result);
+
+                    // Если узел больше не требует времени, продолжаем выполнение последовательности
+                    if (!nodeNeedsMoreTime && result) {
+                        continuePendingSequence();
+                    }
+                }
+            } else if (!pendingSequenceNodes.isEmpty()) {
+                // Продолжаем выполнение отложенной последовательности
+                continuePendingSequence();
+            } else {
+                // Начинаем новое выполнение дерева
+                boolean success = executeTree();
+                LOGGER.info("BehaviorTreeExecutor: Tree execution result: {}", success);
+            }
         }
     }
 
@@ -151,14 +180,66 @@ public class BehaviorTreeExecutor extends Goal {
 
         LOGGER.info("BehaviorTreeExecutor: Executing root node {} of type {}", rootNode.getId(), rootNode.getType());
 
+        // Сбрасываем все отслеживаемые последовательности
+        pendingSequenceNodes.clear();
+        sequenceNodeIndex.clear();
+        currentExecutingNodeId = rootNode.getId();
+
         // Выполняем корневой узел
         return executeNode(rootNode);
+    }
+
+    // Продолжаем выполнение отложенной последовательности
+    private void continuePendingSequence() {
+        // Проверяем, есть ли отложенные последовательности
+        if (pendingSequenceNodes.isEmpty()) {
+            return;
+        }
+
+        // Берем первую последовательность
+        String sequenceId = pendingSequenceNodes.keySet().iterator().next();
+        List<BehaviorNode> sequence = pendingSequenceNodes.get(sequenceId);
+        int index = sequenceNodeIndex.getOrDefault(sequenceId, 0);
+
+        // Если индекс выходит за границы, удаляем последовательность
+        if (index >= sequence.size()) {
+            pendingSequenceNodes.remove(sequenceId);
+            sequenceNodeIndex.remove(sequenceId);
+            LOGGER.info("BehaviorTreeExecutor: Sequence {} completed", sequenceId);
+            return;
+        }
+
+        // Получаем следующий узел для выполнения
+        BehaviorNode nextNode = sequence.get(index);
+        LOGGER.info("BehaviorTreeExecutor: Continuing sequence {}, executing node {} of type {}",
+                sequenceId, nextNode.getId(), nextNode.getType());
+
+        // Устанавливаем текущий выполняемый узел
+        currentExecutingNodeId = nextNode.getId();
+
+        // Выполняем узел
+        boolean result = executeNode(nextNode);
+        LOGGER.info("BehaviorTreeExecutor: Node execution result: {}", result);
+
+        // Обновляем индекс или удаляем последовательность в зависимости от результата
+        if (result) {
+            // Если узел требует больше времени, оставляем индекс как есть
+            if (!nodeNeedsMoreTime) {
+                sequenceNodeIndex.put(sequenceId, index + 1);
+            }
+        } else {
+            // Если узел вернул false, удаляем последовательность
+            pendingSequenceNodes.remove(sequenceId);
+            sequenceNodeIndex.remove(sequenceId);
+            LOGGER.info("BehaviorTreeExecutor: Sequence {} failed", sequenceId);
+        }
     }
 
     // Рекурсивное выполнение узла и его потомков
     public boolean executeNode(BehaviorNode node) {
         if (node == null) {
             LOGGER.error("BehaviorTreeExecutor: Node is null, cannot execute");
+            nodeNeedsMoreTime = false;
             return false;
         }
 
@@ -169,6 +250,7 @@ public class BehaviorTreeExecutor extends Goal {
         if (executor == null) {
             LOGGER.error("BehaviorTreeExecutor: No executor found for node type: {}", nodeType);
             LOGGER.info("Available node types: {}", String.join(", ", nodeExecutors.keySet()));
+            nodeNeedsMoreTime = false;
             return false;
         }
 
@@ -192,9 +274,43 @@ public class BehaviorTreeExecutor extends Goal {
         boolean result = executor.execute(entity, node, this);
         LOGGER.info("BehaviorTreeExecutor: Node {} execution result: {}", node.getId(), result);
 
+        // Если это SequenceNode, который вернул true,
+        // сохраняем дочерние узлы для последующего выполнения
+        if (result && nodeType.equals("sequencenode")) {
+            List<BehaviorNode> children = getChildNodes(node);
+            if (!children.isEmpty()) {
+                pendingSequenceNodes.put(node.getId(), children);
+                sequenceNodeIndex.put(node.getId(), 0);
+                LOGGER.info("BehaviorTreeExecutor: Created pending sequence for node {} with {} children",
+                        node.getId(), children.size());
+
+                // Сразу выполняем первый дочерний узел
+                BehaviorNode firstChild = children.get(0);
+                currentExecutingNodeId = firstChild.getId();
+                LOGGER.info("BehaviorTreeExecutor: Executing first child node {} of sequence {}",
+                        firstChild.getId(), node.getId());
+                result = executeNode(firstChild);
+
+                // Обновляем индекс, если узел выполнен успешно
+                if (result && !nodeNeedsMoreTime) {
+                    sequenceNodeIndex.put(node.getId(), 1);
+                }
+            }
+        }
+
         return result;
     }
 
+    // Метод для логирования выполнения узлов
+    public void logNodeExecution(String nodeType, String nodeId, String message, boolean isStart) {
+        if (isStart) {
+            LOGGER.info("BehaviorTreeExecutor: [START] {} node {} for entity {}: {}",
+                    nodeType, nodeId, entity.getId(), message);
+        } else {
+            LOGGER.info("BehaviorTreeExecutor: [END] {} node {} for entity {}: {}",
+                    nodeType, nodeId, entity.getId(), message);
+        }
+    }
 
     // Вспомогательные методы для обработчиков узлов
 
@@ -206,6 +322,16 @@ public class BehaviorTreeExecutor extends Goal {
     // Выполнить анимацию
     public void playAnimation(String action) {
         entity.playAnimation(action);
+    }
+
+    // Установить флаг, что узлу нужно больше времени
+    public void setNodeNeedsMoreTime(boolean needsMoreTime) {
+        this.nodeNeedsMoreTime = needsMoreTime;
+    }
+
+    // Получить значение флага
+    public boolean getNodeNeedsMoreTime() {
+        return this.nodeNeedsMoreTime;
     }
 
     // Проверить, активен ли узел

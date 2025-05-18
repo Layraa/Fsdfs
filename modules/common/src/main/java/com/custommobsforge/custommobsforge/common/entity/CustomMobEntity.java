@@ -33,7 +33,7 @@ import mod.azure.azurelib.util.AzureLibUtil;
 import org.apache.logging.log4j.LogManager;
 import org.apache.logging.log4j.Logger;
 
-import java.util.Map;
+import java.util.*;
 
 public class CustomMobEntity extends PathfinderMob implements GeoEntity {
     private static final Logger LOGGER = LogManager.getLogger("CustomMobsForge");
@@ -53,6 +53,10 @@ public class CustomMobEntity extends PathfinderMob implements GeoEntity {
 
     // Флаг для отслеживания, был ли моб только что создан
     private boolean isNewlySpawned = true;
+
+    // Набор приоритетных анимаций, которые не должны прерываться
+    private static final Set<String> PRIORITY_ANIMATIONS = new HashSet<>(Arrays.asList(
+            "ATTACK", "HURT", "DEATH", "SPECIAL_1", "SPECIAL_2"));
 
     public CustomMobEntity(EntityType<? extends PathfinderMob> entityType, Level level) {
         super(entityType, level);
@@ -196,36 +200,65 @@ public class CustomMobEntity extends PathfinderMob implements GeoEntity {
     /**
      * Прямое воспроизведение анимации по имени, без использования маппинга
      */
-    /**
-     * Прямое воспроизведение анимации по имени, без использования маппинга
-     */
-    /**
-     * Прямое воспроизведение анимации по имени, без использования маппинга
-     */
     public void playAnimationDirect(String animationName, boolean loop, float speed) {
         LOGGER.info("CustomMobEntity: Directly playing animation '{}' for entity {} (loop: {}, speed: {})",
                 animationName, this.getId(), loop, speed);
 
-        this.currentAnimation = animationName;
-        this.isLoopingAnimation = loop;
-        this.animationSpeed = speed;
+        // Проверка, должны ли мы прервать текущую анимацию
+        boolean canInterrupt = true;
 
-        // Обновляем время последней анимации
-        this.lastAnimationTime = System.currentTimeMillis();
-        this.lastPlayedAnimation = animationName; // Добавлено для отслеживания
+        // Если текущая анимация приоритетная и её время не истекло, не прерываем
+        if (!this.currentAnimation.isEmpty() && System.currentTimeMillis() - lastAnimationTime < 1000) {
+            if (mobData != null && mobData.getAnimations() != null) {
+                for (Map.Entry<String, AnimationMapping> entry : mobData.getAnimations().entrySet()) {
+                    if (PRIORITY_ANIMATIONS.contains(entry.getKey()) &&
+                            entry.getValue().getAnimationName().equals(currentAnimation)) {
 
-        // Синхронизируем с клиентами
-        if (!this.level().isClientSide) {
-            try {
-                NetworkManager.INSTANCE.send(
-                        PacketDistributor.TRACKING_ENTITY.with(() -> this),
-                        new AnimationSyncPacket(this.getId(), animationName, speed, loop)
-                );
-                LOGGER.info("CustomMobEntity: Animation sync packet sent to tracking clients for {} on entity {}",
-                        animationName, this.getId());
-            } catch (Exception e) {
-                LOGGER.error("CustomMobEntity: ERROR sending animation sync packet: {}", e.getMessage());
-                e.printStackTrace();
+                        // Проверяем, является ли новая анимация тоже приоритетной
+                        boolean newIsAlsoPriority = false;
+                        for (Map.Entry<String, AnimationMapping> newEntry : mobData.getAnimations().entrySet()) {
+                            if (PRIORITY_ANIMATIONS.contains(newEntry.getKey()) &&
+                                    newEntry.getValue().getAnimationName().equals(animationName)) {
+                                newIsAlsoPriority = true;
+                                break;
+                            }
+                        }
+
+                        // Если новая не приоритетная, не прерываем текущую
+                        if (!newIsAlsoPriority) {
+                            LOGGER.info("Not interrupting priority animation {} with non-priority {}",
+                                    currentAnimation, animationName);
+                            canInterrupt = false;
+                        }
+                        break;
+                    }
+                }
+            }
+        }
+
+        // Если можно прервать, устанавливаем новую анимацию
+        if (canInterrupt) {
+            this.currentAnimation = animationName;
+            this.isLoopingAnimation = loop;
+            this.animationSpeed = speed;
+
+            // Обновляем время последней анимации
+            this.lastAnimationTime = System.currentTimeMillis();
+            this.lastPlayedAnimation = animationName; // Добавлено для отслеживания
+
+            // Синхронизируем с клиентами
+            if (!this.level().isClientSide) {
+                try {
+                    NetworkManager.INSTANCE.send(
+                            PacketDistributor.TRACKING_ENTITY.with(() -> this),
+                            new AnimationSyncPacket(this.getId(), animationName, speed, loop)
+                    );
+                    LOGGER.info("CustomMobEntity: Animation sync packet sent to tracking clients for {} on entity {}",
+                            animationName, this.getId());
+                } catch (Exception e) {
+                    LOGGER.error("CustomMobEntity: ERROR sending animation sync packet: {}", e.getMessage());
+                    e.printStackTrace();
+                }
             }
         }
     }
@@ -344,10 +377,31 @@ public class CustomMobEntity extends PathfinderMob implements GeoEntity {
             return; // Выходим, чтобы не перезаписать анимацию SPAWN сразу же
         }
 
+        // ВАЖНОЕ ИЗМЕНЕНИЕ: Проверка приоритетной анимации
+        boolean isPlayingPriorityAnimation = false;
+        if (!this.currentAnimation.isEmpty() && System.currentTimeMillis() - lastAnimationTime < 1500) {
+            // Проверка по названию анимации (проверяем каждое маппинг)
+            if (mobData != null && mobData.getAnimations() != null) {
+                for (Map.Entry<String, AnimationMapping> entry : mobData.getAnimations().entrySet()) {
+                    if (PRIORITY_ANIMATIONS.contains(entry.getKey()) &&
+                            entry.getValue().getAnimationName().equals(currentAnimation)) {
+                        isPlayingPriorityAnimation = true;
+                        break;
+                    }
+                }
+            }
+
+            // Проверка по имени последней проигранной анимации
+            if (PRIORITY_ANIMATIONS.contains(lastPlayedAnimation)) {
+                isPlayingPriorityAnimation = true;
+            }
+        }
+
         // Автоматическое проигрывание анимаций IDLE и WALK
         if (!this.level().isClientSide && mobData != null &&
                 System.currentTimeMillis() - lastAnimationTime > ANIMATION_COOLDOWN &&
-                !this.isDeadOrDying() && this.hurtTime <= 0) { // Не проигрываем IDLE/WALK если моб умирает или получает урон
+                !this.isDeadOrDying() && this.hurtTime <= 0 &&
+                !isPlayingPriorityAnimation) { // Не проигрываем IDLE/WALK если идет приоритетная анимация
 
             // Проверяем скорость движения
             double speed = this.getDeltaMovement().horizontalDistance();

@@ -5,10 +5,14 @@ import com.custommobsforge.custommobsforge.common.entity.CustomMobEntity;
 import org.apache.logging.log4j.LogManager;
 import org.apache.logging.log4j.Logger;
 
+import java.util.HashMap;
 import java.util.Map;
 
 public class PlayAnimationNodeExecutor implements NodeExecutor {
     private static final Logger LOGGER = LogManager.getLogger("CustomMobsForge");
+
+    // Карта для хранения времени начала воспроизведения анимации
+    private static final Map<String, Long> animationStartTimes = new HashMap<>();
 
     @Override
     public boolean execute(CustomMobEntity entity, BehaviorNode node, BehaviorTreeExecutor executor) {
@@ -116,13 +120,60 @@ public class PlayAnimationNodeExecutor implements NodeExecutor {
             }
         }
 
-        // Воспроизводим анимацию НАПРЯМУЮ, без маппинга
-        LOGGER.info("PlayAnimationNodeExecutor: PLAYING ANIMATION '{}' for entity {} (loop: {}, speed: {})",
-                animationId, entity.getId(), loop, speed);
+        // Уникальный ID для узла и моба
+        String animationKey = entity.getId() + ":" + node.getId();
 
-        // Вызываем метод непосредственно для проигрывания анимации
-        entity.playAnimationDirect(animationId, loop, speed);
+        // Проверяем, запускали ли мы уже анимацию
+        long currentTime = System.currentTimeMillis();
 
-        return true;
+        if (!animationStartTimes.containsKey(animationKey)) {
+            // Воспроизводим анимацию НАПРЯМУЮ, без маппинга
+            LOGGER.info("PlayAnimationNodeExecutor: PLAYING ANIMATION '{}' for entity {} (loop: {}, speed: {})",
+                    animationId, entity.getId(), loop, speed);
+
+            // Вызываем метод непосредственно для проигрывания анимации
+            entity.playAnimationDirect(animationId, loop, speed);
+
+            // Запоминаем время начала
+            animationStartTimes.put(animationKey, currentTime);
+
+            // Для зацикленных анимаций сразу возвращаем успех
+            if (loop) {
+                return true;
+            }
+
+            // Для незацикленных анимаций нужно дождаться их завершения
+            executor.setNodeNeedsMoreTime(true);
+            return true;
+        } else {
+            // Проверяем, прошло ли достаточно времени для незацикленных анимаций
+            long startTime = animationStartTimes.get(animationKey);
+
+            // Считаем, что анимация длится ~1-2 секунды
+            long animationDuration = (long)(2000 / speed); // Длительность зависит от скорости
+
+            if (currentTime - startTime >= animationDuration && !loop) {
+                // Анимация завершилась
+                LOGGER.info("PlayAnimationNodeExecutor: Animation completed after {} ms",
+                        currentTime - startTime);
+
+                // Удаляем из отслеживания
+                animationStartTimes.remove(animationKey);
+
+                // Больше не требует времени
+                executor.setNodeNeedsMoreTime(false);
+
+                // Возвращаем успех
+                return true;
+            } else {
+                // Анимация еще воспроизводится
+                LOGGER.info("PlayAnimationNodeExecutor: Animation in progress, elapsed {} ms",
+                        currentTime - startTime);
+
+                // Продолжаем требовать время
+                executor.setNodeNeedsMoreTime(true);
+                return true;
+            }
+        }
     }
 }
