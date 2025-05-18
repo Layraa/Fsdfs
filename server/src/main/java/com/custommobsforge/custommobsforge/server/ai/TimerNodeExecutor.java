@@ -81,7 +81,7 @@ public class TimerNodeExecutor implements NodeExecutor {
             long durationMs = (long) (duration * 1000);
             timerDurations.put(timerId, durationMs);
 
-            // ВАЖНОЕ ИЗМЕНЕНИЕ: Сообщаем исполнителю, что нужно больше времени
+            // Сообщаем исполнителю, что нужно больше времени
             executor.setNodeNeedsMoreTime(true);
 
             executor.logNodeExecution("TimerNode", node.getId(),
@@ -116,6 +116,7 @@ public class TimerNodeExecutor implements NodeExecutor {
             // Выполняем дочерние узлы, если есть
             List<BehaviorNode> children = executor.getChildNodes(node);
             if (!children.isEmpty()) {
+                LOGGER.info("TimerNodeExecutor: Executing child node after timer expired");
                 for (BehaviorNode child : children) {
                     LOGGER.info("TimerNodeExecutor: Executing child node {} after timer expired", child.getId());
                     executor.executeNode(child);

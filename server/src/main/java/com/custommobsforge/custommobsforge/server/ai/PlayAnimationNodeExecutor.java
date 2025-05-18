@@ -7,19 +7,125 @@ import org.apache.logging.log4j.Logger;
 
 import java.util.HashMap;
 import java.util.Map;
+import java.util.UUID;
 
 public class PlayAnimationNodeExecutor implements NodeExecutor {
     private static final Logger LOGGER = LogManager.getLogger("CustomMobsForge");
 
-    // Карта для хранения времени начала воспроизведения анимации
-    private static final Map<String, Long> animationStartTimes = new HashMap<>();
+    // Карта для узлов и их анимаций
+    private static final Map<String, String> nodeAnimations = new HashMap<>();
+
+    // Карта для ID коллбэков
+    private static final Map<String, String> callbackIds = new HashMap<>();
 
     @Override
     public boolean execute(CustomMobEntity entity, BehaviorNode node, BehaviorTreeExecutor executor) {
         LOGGER.info("PlayAnimationNodeExecutor: Executing node {} of type {} for entity {}",
                 node.getId(), node.getType(), entity.getId());
 
-        // Вывод всех параметров узла
+        // Логирование параметров узла
+        logNodeParameters(node);
+
+        // Получаем ID анимации
+        String animationId = getAnimationId(node);
+        if (animationId == null || animationId.isEmpty()) {
+            LOGGER.error("PlayAnimationNodeExecutor: No animation ID found for node {}", node.getId());
+            executor.setNodeNeedsMoreTime(false);
+            return false;
+        }
+
+        // Получаем настройки анимации
+        boolean loop = getLoopParameter(node);
+        float speed = getSpeedParameter(node);
+
+        // Уникальный ключ для узла+сущности
+        String nodeKey = entity.getId() + ":" + node.getId();
+
+        // Сохраняем анимацию для этого узла
+        nodeAnimations.put(nodeKey, animationId);
+
+
+        // Проверяем, зациклена ли анимация
+            if (loop) {
+                // Зацикленные анимации просто запускаем и сразу возвращаем успех
+                LOGGER.info("PlayAnimationNodeExecutor: Playing looped animation '{}' and returning success", animationId);
+                entity.playAnimationDirect(animationId, true, speed);
+                executor.setNodeNeedsMoreTime(false);
+                return true;
+            }
+
+            // Проверяем, запускали ли мы уже эту анимацию для этого узла
+            if (!callbackIds.containsKey(nodeKey)) {
+                // Первый запуск - регистрируем коллбэк и запускаем анимацию
+                String callbackId = UUID.randomUUID().toString();
+                callbackIds.put(nodeKey, callbackId);
+
+                // Регистрируем коллбэк для отслеживания завершения анимации
+                registerAnimationCallback(entity, callbackId, animationId);
+
+                // Запускаем анимацию
+                LOGGER.info("PlayAnimationNodeExecutor: First execution, playing animation '{}'", animationId);
+
+                // НОВОЕ: задержка перед запуском новой анимации
+                try {
+                    Thread.sleep(50); // 50мс задержка, чтобы AzureLib успел обработать предыдущие анимации
+                } catch (InterruptedException e) {
+                    // Игнорируем прерывание
+                }
+
+                entity.playAnimationDirect(animationId, false, speed);
+
+                // Сообщаем, что нам нужно больше времени
+                executor.setNodeNeedsMoreTime(true);
+                return true;
+            } else {
+                // Последующие вызовы - проверяем, завершилась ли анимация
+                if (entity.hasAnimationCompleted(animationId)) {
+                    // Анимация завершилась - очищаем данные и двигаемся дальше
+                    LOGGER.info("PlayAnimationNodeExecutor: Animation '{}' has completed", animationId);
+
+                    // Удаляем коллбэк
+                    String callbackId = callbackIds.remove(nodeKey);
+                    entity.removeAnimationCallback(callbackId);
+
+                    // Удаляем запись об анимации
+                    nodeAnimations.remove(nodeKey);
+
+                    // Сообщаем, что нам больше не нужно времени
+                    executor.setNodeNeedsMoreTime(false);
+                    return true;
+                } else {
+                    // Анимация еще не завершилась - продолжаем ждать
+                    LOGGER.info("PlayAnimationNodeExecutor: Animation '{}' still in progress", animationId);
+
+                    // Проверяем, прошло ли достаточно времени с начала анимации
+                    long startTime = entity.getAnimationStartTime(animationId);
+                    long currentTime = System.currentTimeMillis();
+                    long duration = entity.estimateAnimationDuration(animationId);
+
+                    if (currentTime - startTime > duration * 1.5) {
+                        // Анимация, вероятно, зависла - принудительно завершаем ее
+                        LOGGER.warn("PlayAnimationNodeExecutor: Animation '{}' seems to be stuck, forcing completion", animationId);
+                        entity.forceCompleteAnimation(animationId);
+
+                        // Удаляем коллбэк
+                        String callbackId = callbackIds.remove(nodeKey);
+                        entity.removeAnimationCallback(callbackId);
+
+                        // Сообщаем, что нам больше не нужно времени
+                        executor.setNodeNeedsMoreTime(false);
+                        return true;
+                    }
+
+                    executor.setNodeNeedsMoreTime(true);
+                    return true;
+                }
+            }
+        }
+
+    // Вспомогательные методы
+
+    private void logNodeParameters(BehaviorNode node) {
         LOGGER.info("PlayAnimationNodeExecutor: Node parameters:");
         LOGGER.info("  - description: {}", node.getDescription());
         LOGGER.info("  - parameter: {}", node.getParameter());
@@ -33,50 +139,50 @@ public class PlayAnimationNodeExecutor implements NodeExecutor {
                 LOGGER.info("    * {} = {}", entry.getKey(), entry.getValue());
             }
         }
+    }
 
-        // Получаем параметры анимации
+    private String getAnimationId(BehaviorNode node) {
+        // Поиск ID анимации из разных источников
         String animationId = null;
 
-        // 1. Проверим параметр animation в customParameters
+        // 1. Из customParameters
         animationId = node.getCustomParameterAsString("animation", null);
         if (animationId != null && !animationId.isEmpty()) {
             LOGGER.info("PlayAnimationNodeExecutor: Using animation from customParameter: {}", animationId);
+            return animationId;
         }
-        // 2. Проверим параметр в обычном параметре узла
-        else if (node.getParameter() != null && !node.getParameter().isEmpty()) {
-            String param = node.getParameter();
-            LOGGER.info("PlayAnimationNodeExecutor: Parsing parameter: {}", param);
 
+        // 2. Из параметра узла
+        if (node.getParameter() != null && !node.getParameter().isEmpty()) {
+            String param = node.getParameter();
             if (param.contains("animation=")) {
                 String[] parts = param.split("animation=", 2);
                 if (parts.length > 1) {
                     String part = parts[1];
-                    // Если есть другие параметры после, отделенные точкой с запятой
                     if (part.contains(";")) {
                         animationId = part.split(";", 2)[0];
                     } else {
                         animationId = part;
                     }
                     LOGGER.info("PlayAnimationNodeExecutor: Extracted animation value from parameter: {}", animationId);
+                    return animationId;
                 }
             }
         }
-        // 3. В последнюю очередь проверим поле animationId
-        if ((animationId == null || animationId.isEmpty()) && node.getAnimationId() != null && !node.getAnimationId().isEmpty()) {
+
+        // 3. Из поля animationId
+        if (node.getAnimationId() != null && !node.getAnimationId().isEmpty()) {
             animationId = node.getAnimationId();
             LOGGER.info("PlayAnimationNodeExecutor: Using value from animationId field: {}", animationId);
+            return animationId;
         }
 
-        // Если нет анимации, возвращаем неудачу
-        if (animationId == null || animationId.isEmpty()) {
-            LOGGER.error("PlayAnimationNodeExecutor: ERROR - No animation ID found for node {}", node.getId());
-            executor.setNodeNeedsMoreTime(false);
-            return false;
-        }
+        return null;
+    }
 
-        // Получаем настройки воспроизведения
+    private boolean getLoopParameter(BehaviorNode node) {
         boolean loop = node.isLoopAnimation();
-        // Проверим параметр узла
+
         if (node.getParameter() != null && node.getParameter().contains("loop=")) {
             try {
                 String param = node.getParameter();
@@ -94,9 +200,13 @@ public class PlayAnimationNodeExecutor implements NodeExecutor {
             }
         }
 
+        return loop;
+    }
+
+    private float getSpeedParameter(BehaviorNode node) {
         float speed = (float) node.getAnimationSpeed();
+
         if (speed <= 0.001f) {
-            // Проверим параметр скорости
             if (node.getParameter() != null && node.getParameter().contains("speed=")) {
                 try {
                     String param = node.getParameter();
@@ -114,69 +224,25 @@ public class PlayAnimationNodeExecutor implements NodeExecutor {
                 }
             }
 
-            // Если скорость все еще не задана, используем значение по умолчанию
             if (speed <= 0.001f) {
                 speed = 1.0f;
                 LOGGER.info("PlayAnimationNodeExecutor: Using default speed: {}", speed);
             }
         }
 
-        // Уникальный ID для узла и моба
-        String animationKey = entity.getId() + ":" + node.getId();
+        return speed;
+    }
 
-        // Проверяем, запускали ли мы уже анимацию
-        long currentTime = System.currentTimeMillis();
+    private void registerAnimationCallback(CustomMobEntity entity, String callbackId, String animationId) {
+        // Регистрируем коллбэк для уведомления о завершении анимации
+        final String finalAnimationId = animationId;
 
-        if (!animationStartTimes.containsKey(animationKey)) {
-            // Воспроизводим анимацию НАПРЯМУЮ, без маппинга
-            LOGGER.info("PlayAnimationNodeExecutor: PLAYING ANIMATION '{}' for entity {} (loop: {}, speed: {})",
-                    animationId, entity.getId(), loop, speed);
-
-            // Вызываем метод непосредственно для проигрывания анимации
-            entity.playAnimationDirect(animationId, loop, speed);
-
-            // Запоминаем время начала
-            animationStartTimes.put(animationKey, currentTime);
-
-            // Для зацикленных анимаций сразу возвращаем успех без задержки
-            if (loop) {
-                executor.setNodeNeedsMoreTime(false);
-                return true;
+        entity.registerAnimationCallback(callbackId, completedAnimId -> {
+            if (completedAnimId.equals(finalAnimationId)) {
+                LOGGER.info("PlayAnimationNodeExecutor: Animation callback triggered for '{}'", finalAnimationId);
             }
+        });
 
-            // Для незацикленных анимаций нужно дождаться их завершения
-            executor.setNodeNeedsMoreTime(true);
-            return true;
-        } else {
-            // Проверяем, прошло ли достаточно времени для незацикленных анимаций
-            long startTime = animationStartTimes.get(animationKey);
-
-            // Вычисляем длительность анимации в зависимости от скорости
-            // Считаем, что анимация длится ~2 секунды при нормальной скорости
-            long animationDuration = (long)(2000 / speed);
-
-            if (currentTime - startTime >= animationDuration && !loop) {
-                // Анимация завершилась
-                LOGGER.info("PlayAnimationNodeExecutor: Animation completed after {} ms",
-                        currentTime - startTime);
-
-                // Удаляем из отслеживания
-                animationStartTimes.remove(animationKey);
-
-                // Больше не требует времени
-                executor.setNodeNeedsMoreTime(false);
-
-                // Возвращаем успех
-                return true;
-            } else {
-                // Анимация еще воспроизводится
-                LOGGER.info("PlayAnimationNodeExecutor: Animation in progress, elapsed {} ms",
-                        currentTime - startTime);
-
-                // Продолжаем требовать время
-                executor.setNodeNeedsMoreTime(true);
-                return true;
-            }
-        }
+        LOGGER.info("PlayAnimationNodeExecutor: Registered callback {} for animation '{}'", callbackId, animationId);
     }
 }

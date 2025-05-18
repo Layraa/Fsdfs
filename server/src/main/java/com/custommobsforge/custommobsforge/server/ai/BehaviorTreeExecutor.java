@@ -33,20 +33,20 @@ public class BehaviorTreeExecutor extends Goal {
     private boolean isExecutingSequence = false;
     private boolean treeCompleted = false;
     private long lastTreeCompletionTime = 0;
-    private static final long TREE_RESTART_DELAY = 1000; // 1 секунда в миллисекундах
+    private static final long TREE_RESTART_DELAY = 500; // Уменьшено с 1000 до 500 мс для более быстрого рестарта
 
     // Конструктор
     public BehaviorTreeExecutor(CustomMobEntity entity, BehaviorTree tree) {
         this.entity = entity;
         this.tree = tree;
 
-        System.out.println("BehaviorTreeExecutor: Created for entity " + entity.getId() +
-                " with tree ID: " + (tree != null ? tree.getId() : "null"));
+        LOGGER.info("BehaviorTreeExecutor: Created for entity {} with tree ID: {}",
+                entity.getId(), (tree != null ? tree.getId() : "null"));
 
         if (tree == null) {
-            System.out.println("BehaviorTreeExecutor: WARNING - Tree is null!");
+            LOGGER.error("BehaviorTreeExecutor: WARNING - Tree is null!");
         } else if (tree.getNodes() == null || tree.getNodes().isEmpty()) {
-            System.out.println("BehaviorTreeExecutor: WARNING - Tree has no nodes!");
+            LOGGER.error("BehaviorTreeExecutor: WARNING - Tree has no nodes!");
         }
 
         // Регистрируем все обработчики узлов
@@ -56,10 +56,10 @@ public class BehaviorTreeExecutor extends Goal {
         BehaviorNode rootNode = tree != null ? tree.getRootNode() : null;
         if (rootNode != null) {
             currentRootNodeId = rootNode.getId();
-            System.out.println("BehaviorTreeExecutor: Root node set to " + rootNode.getId() +
-                    " of type " + rootNode.getType());
+            LOGGER.info("BehaviorTreeExecutor: Root node set to {} of type {}",
+                    rootNode.getId(), rootNode.getType());
         } else {
-            System.out.println("BehaviorTreeExecutor: WARNING - No root node found!");
+            LOGGER.error("BehaviorTreeExecutor: WARNING - No root node found!");
         }
     }
 
@@ -104,6 +104,8 @@ public class BehaviorTreeExecutor extends Goal {
         isExecutingSequence = false;
         pendingSequenceNodes.clear();
         sequenceNodeIndex.clear();
+        nodeNeedsMoreTime = false;
+        executionTicks = 0;
     }
 
     @Override
@@ -115,6 +117,7 @@ public class BehaviorTreeExecutor extends Goal {
         currentExecutingNodeId = null;
         treeCompleted = false;
         isExecutingSequence = false;
+        nodeNeedsMoreTime = false;
     }
 
     @Override
@@ -158,6 +161,7 @@ public class BehaviorTreeExecutor extends Goal {
                 isExecutingSequence = false;
                 pendingSequenceNodes.clear();
                 sequenceNodeIndex.clear();
+                nodeNeedsMoreTime = false;
             }
 
             // Если дерево завершено и не прошло время для перезапуска, пропускаем выполнение
@@ -189,6 +193,12 @@ public class BehaviorTreeExecutor extends Goal {
                 LOGGER.info("BehaviorTreeExecutor: Tree execution started with result: {}", success);
             }
         }
+    }
+
+    public void clearNodeStatus(String nodeId) {
+        // Очищаем статус узла, если что-то пошло не так
+        // Это поможет избежать застреваний в деревьях поведения
+        nodeNeedsMoreTime = false;
     }
 
     // Метод выполнения дерева поведения
@@ -229,7 +239,7 @@ public class BehaviorTreeExecutor extends Goal {
 
         // Если корневой узел не создал последовательность или вернул false,
         // дерево считается завершенным
-        if (!isExecutingSequence) {
+        if (!isExecutingSequence && !nodeNeedsMoreTime) {
             treeCompleted = true;
             lastTreeCompletionTime = System.currentTimeMillis();
             LOGGER.info("BehaviorTreeExecutor: Tree execution completed, no sequences to continue");
