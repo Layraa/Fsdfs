@@ -43,6 +43,8 @@ public class ServerCommandRegistrationHandler {
             // Получаем мир сервера
             ServerLevel level = source.getLevel();
 
+            System.out.println("!!!!!!!! ServerCommandRegistrationHandler: Spawning mob with ID: " + mobId + " !!!!!!!!");
+
             // Загружаем данные моба
             var mobData = MobConfigManager.loadMobConfig(mobId, level);
 

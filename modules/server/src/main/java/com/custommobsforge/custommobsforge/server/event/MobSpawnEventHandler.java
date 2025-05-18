@@ -1,10 +1,7 @@
 package com.custommobsforge.custommobsforge.server.event;
 
 import com.custommobsforge.custommobsforge.common.config.MobConfigManager;
-import com.custommobsforge.custommobsforge.common.data.MobData;
-import com.custommobsforge.custommobsforge.common.data.BehaviorTree;
-import com.custommobsforge.custommobsforge.common.data.BehaviorConnection;
-import com.custommobsforge.custommobsforge.common.data.BehaviorNode;
+import com.custommobsforge.custommobsforge.common.data.*;
 import com.custommobsforge.custommobsforge.common.entity.CustomMobEntity;
 import com.custommobsforge.custommobsforge.server.ai.BehaviorTreeExecutor;
 import net.minecraft.server.level.ServerLevel;
@@ -19,14 +16,22 @@ import net.minecraftforge.fml.common.Mod;
 
 import com.google.gson.Gson;
 import com.google.gson.GsonBuilder;
+import org.json.JSONArray;
+import org.json.JSONObject;
+import org.apache.logging.log4j.LogManager;
+import org.apache.logging.log4j.Logger;
+
+import java.io.File;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.util.ArrayList;
+import java.util.List;
+import java.util.Map;
 
 @Mod.EventBusSubscriber
 public class MobSpawnEventHandler {
-
-    // Добавляем GSON для десериализации
+    private static final Logger LOGGER = LogManager.getLogger("CustomMobsForge");
     private static final Gson GSON = new GsonBuilder().create();
 
     @SubscribeEvent
@@ -40,53 +45,71 @@ public class MobSpawnEventHandler {
         }
 
         // Настраиваем кастомного моба при появлении в мире
-        if (event.getEntity() instanceof CustomMobEntity && event.getLevel() instanceof ServerLevel) {
+        if (event.getEntity() instanceof CustomMobEntity && !event.getLevel().isClientSide) {
             CustomMobEntity entity = (CustomMobEntity) event.getEntity();
             ServerLevel level = (ServerLevel) event.getLevel();
 
             // Расширенное логирование
-            System.out.println("MobSpawnEventHandler: CustomMobEntity joined world - ID: " + entity.getId() +
-                    ", mobId: " + entity.getMobId() +
-                    ", hasData: " + (entity.getMobData() != null));
+            LOGGER.info("!!! MobSpawnEventHandler: CustomMobEntity joined world - ID: {}, mobId: {}, hasData: {}",
+                    entity.getId(), entity.getMobId(), (entity.getMobData() != null));
 
-            // Если у моба уже есть данные, пропускаем
-            if (entity.getMobData() != null) {
-                System.out.println("MobSpawnEventHandler: Entity already has mob data, skipping configuration");
-                return;
+            // Если у моба уже есть данные, пропускаем загрузку данных моба
+            if (entity.getMobData() == null) {
+                // Получаем ID моба
+                String mobId = entity.getMobId();
+                if (mobId == null || mobId.isEmpty()) {
+                    LOGGER.warn("!!! MobSpawnEventHandler: Entity has no mob ID, skipping configuration");
+                    return;
+                }
+
+                // Загружаем данные моба
+                MobData mobData = MobConfigManager.loadMobConfig(mobId, level);
+                if (mobData == null) {
+                    LOGGER.error("!!! MobSpawnEventHandler: Could not load mob data for ID: {}", mobId);
+                    return;
+                }
+
+                // Устанавливаем данные
+                LOGGER.info("!!! MobSpawnEventHandler: Setting mob data for entity {} with model: {}, texture: {}",
+                        entity.getId(), mobData.getModelPath(), mobData.getTexturePath());
+                entity.setMobData(mobData);
             }
 
-            // Получаем ID моба
-            String mobId = entity.getMobId();
-            if (mobId == null || mobId.isEmpty()) {
-                System.out.println("MobSpawnEventHandler: Entity has no mob ID, skipping configuration");
-                return;
-            }
-
-            // Загружаем данные моба
-            MobData mobData = MobConfigManager.loadMobConfig(mobId, level);
+            // Проверим наличие дерева поведения и исполнителя независимо от того,
+            // были ли данные загружены сейчас или уже существовали
+            MobData mobData = entity.getMobData();
             if (mobData == null) {
-                System.out.println("MobSpawnEventHandler: Could not load mob data for ID: " + mobId);
+                LOGGER.error("!!! MobSpawnEventHandler: Entity still has no mob data after attempted load!");
                 return;
             }
 
-            // Устанавливаем данные
-            System.out.println("MobSpawnEventHandler: Setting mob data for entity " + entity.getId() +
-                    " with model: " + mobData.getModelPath() +
-                    ", texture: " + mobData.getTexturePath());
-            entity.setMobData(mobData);
+            // Сначала проверим, есть ли у моба уже исполнитель дерева поведения
+            boolean hasExecutor = false;
+            for (Goal goal : entity.goalSelector.getAvailableGoals()) {
+                if (goal instanceof BehaviorTreeExecutor) {
+                    hasExecutor = true;
+                    LOGGER.info("!!! MobSpawnEventHandler: Entity already has BehaviorTreeExecutor");
+                    break;
+                }
+            }
+
+            // Если у моба уже есть исполнитель, пропускаем загрузку дерева
+            if (hasExecutor) {
+                LOGGER.info("!!! MobSpawnEventHandler: Skipping behavior tree setup, entity already has executor");
+                return;
+            }
 
             // Если у моба есть дерево поведения, добавляем соответствующую цель
             if (mobData.getBehaviorTree() != null) {
-                System.out.println("MobSpawnEventHandler: Entity " + entity.getId() +
-                        " has behavior tree with ID: " + mobData.getBehaviorTree().getId());
+                LOGGER.info("!!! MobSpawnEventHandler: Entity {} has behavior tree with ID: {}",
+                        entity.getId(), mobData.getBehaviorTree().getId());
 
                 // Проверяем, есть ли узлы в дереве
-                if (mobData.getBehaviorTree().getNodes() != null &&
-                        !mobData.getBehaviorTree().getNodes().isEmpty()) {
-                    System.out.println("MobSpawnEventHandler: Behavior tree has " +
-                            mobData.getBehaviorTree().getNodes().size() + " nodes");
+                if (mobData.getBehaviorTree().getNodes() == null || mobData.getBehaviorTree().getNodes().isEmpty()) {
+                    LOGGER.warn("!!! MobSpawnEventHandler: WARNING - Behavior tree has NO nodes! Trying to load full tree...");
                 } else {
-                    System.out.println("MobSpawnEventHandler: Behavior tree has NO nodes!");
+                    LOGGER.info("!!! MobSpawnEventHandler: Behavior tree already has {} nodes",
+                            mobData.getBehaviorTree().getNodes().size());
                 }
 
                 // Загружаем полное дерево поведения по ID
@@ -94,66 +117,59 @@ public class MobSpawnEventHandler {
                 if (fullTree != null) {
                     // Проверяем полноту дерева
                     if (fullTree.getNodes() != null && !fullTree.getNodes().isEmpty()) {
-                        System.out.println("MobSpawnEventHandler: Loaded full tree with " +
-                                fullTree.getNodes().size() + " nodes and " +
-                                fullTree.getConnections().size() + " connections");
+                        LOGGER.info("!!! MobSpawnEventHandler: Loaded full tree with {} nodes and {} connections",
+                                fullTree.getNodes().size(),
+                                (fullTree.getConnections() != null ? fullTree.getConnections().size() : 0));
 
-                        // Выводим все узлы дерева для отладки
+                        // Дамп всех узлов и связей для отладки
+                        LOGGER.info("!!! ============ ДЕРЕВО ПОВЕДЕНИЯ УЗЛЫ ============");
                         for (BehaviorNode node : fullTree.getNodes()) {
-                            System.out.println("  - Node: " + node.getId() + " (" + node.getType() +
-                                    "): " + node.getDescription());
+                            LOGGER.info("!!! Node: ID={}, Type={}, Desc={}, Param={}",
+                                    node.getId(), node.getType(), node.getDescription(), node.getParameter());
+                        }
 
-                            // Проверяем параметры узла, особенно для PlayAnimationNode
-                            if (node.getType().equalsIgnoreCase("PlayAnimationNode")) {
-                                System.out.println("    Animation ID: " + node.getAnimationId());
-                                System.out.println("    Animation from parameters: " +
-                                        node.getCustomParameterAsString("animation", "NONE"));
-
-                                // Для интереса: какие анимации доступны?
-                                if (mobData.getAnimations() != null) {
-                                    System.out.println("    Available animations in mob data:");
-                                    for (java.util.Map.Entry<String, com.custommobsforge.custommobsforge.common.data.AnimationMapping> entry :
-                                            mobData.getAnimations().entrySet()) {
-                                        System.out.println("      " + entry.getKey() + " -> " +
-                                                entry.getValue().getAnimationName());
-                                    }
-                                }
+                        LOGGER.info("!!! ============ ДЕРЕВО ПОВЕДЕНИЯ СВЯЗИ ============");
+                        if (fullTree.getConnections() != null) {
+                            for (BehaviorConnection conn : fullTree.getConnections()) {
+                                LOGGER.info("!!! Connection: {} -> {}", conn.getSourceNodeId(), conn.getTargetNodeId());
                             }
+                        } else {
+                            LOGGER.warn("!!! Connections list is NULL!");
                         }
 
-                        // Выводим все соединения
-                        for (BehaviorConnection conn : fullTree.getConnections()) {
-                            System.out.println("  - Connection: " + conn.getSourceNodeId() +
-                                    " -> " + conn.getTargetNodeId());
-                        }
+                        // Заменяем дерево на полное
+                        mobData.setBehaviorTree(fullTree);
                     } else {
-                        System.out.println("MobSpawnEventHandler: Loaded tree has NO nodes!");
+                        LOGGER.warn("!!! MobSpawnEventHandler: WARNING - Loaded tree STILL has NO nodes! Check JSON file structure.");
                     }
-
-                    // Заменяем пустое дерево на полное
-                    mobData.setBehaviorTree(fullTree);
                 } else {
-                    System.out.println("MobSpawnEventHandler: Failed to load behavior tree from server for ID: " +
+                    LOGGER.error("!!! MobSpawnEventHandler: Failed to load behavior tree from server for ID: {}",
                             mobData.getBehaviorTree().getId());
                 }
 
-                // Добавляем поведение
-                BehaviorTreeExecutor executor = new BehaviorTreeExecutor(entity, mobData.getBehaviorTree());
-                entity.goalSelector.addGoal(1, executor);
-                System.out.println("MobSpawnEventHandler: Added behavior tree executor for entity " + entity.getId());
-
-                // Проверим, действительно ли добавлен исполнитель
-                boolean found = false;
-                for (Goal goal : entity.goalSelector.getAvailableGoals()) {
-                    if (goal instanceof BehaviorTreeExecutor) {
-                        found = true;
-                        break;
+                // Создаем исполнителя и добавляем его к мобу ТОЛЬКО если дерево имеет узлы
+                if (mobData.getBehaviorTree().getNodes() != null && !mobData.getBehaviorTree().getNodes().isEmpty()) {
+                    // Проверим структуру дерева перед добавлением исполнителя
+                    BehaviorNode rootNode = mobData.getBehaviorTree().getRootNode();
+                    if (rootNode == null) {
+                        LOGGER.warn("!!! MobSpawnEventHandler: WARNING - Behavior tree has no root node!");
+                    } else {
+                        LOGGER.info("!!! MobSpawnEventHandler: Root node is: {} of type {}",
+                                rootNode.getId(), rootNode.getType());
                     }
+
+                    BehaviorTreeExecutor executor = new BehaviorTreeExecutor(entity, mobData.getBehaviorTree());
+                    entity.goalSelector.addGoal(1, executor);
+                    LOGGER.info("!!! MobSpawnEventHandler: Added behavior tree executor for entity {}", entity.getId());
+                } else {
+                    LOGGER.error("!!! MobSpawnEventHandler: ERROR - Cannot add behavior tree executor because tree has no nodes!");
                 }
-                System.out.println("MobSpawnEventHandler: BehaviorTreeExecutor found in goals: " + found);
+            } else {
+                LOGGER.warn("!!! MobSpawnEventHandler: Entity {} has NO behavior tree defined!", entity.getId());
             }
 
             // Воспроизводим анимацию появления
+            LOGGER.info("!!! MobSpawnEventHandler: Playing SPAWN animation for entity {}", entity.getId());
             entity.playAnimation("SPAWN");
         }
     }
@@ -167,23 +183,53 @@ public class MobSpawnEventHandler {
             Path behaviorFile = level.getServer().getWorldPath(LevelResource.ROOT)
                     .resolve("custommobsforge").resolve("behaviors").resolve(treeId + ".json");
 
+            LOGGER.info("!!! MobSpawnEventHandler: Trying to load behavior tree from path: {}", behaviorFile);
+
             if (Files.exists(behaviorFile)) {
                 // Читаем содержимое файла
                 String json = new String(Files.readAllBytes(behaviorFile), StandardCharsets.UTF_8);
 
-                // Выводим часть содержимого для отладки
-                System.out.println("MobSpawnEventHandler: Loaded behavior tree file, length: " +
-                        json.length() + " bytes, starting with: " +
-                        json.substring(0, Math.min(100, json.length())) + "...");
+                LOGGER.info("!!! MobSpawnEventHandler: Loaded behavior tree JSON, length: {} bytes", json.length());
+                LOGGER.info("!!! BehaviorTree JSON content (first 200 chars): {}",
+                        json.substring(0, Math.min(200, json.length())));
 
-                // Десериализуем дерево поведения
-                return GSON.fromJson(json, BehaviorTree.class);
+                try {
+                    // Десериализуем дерево поведения
+                    BehaviorTree tree = GSON.fromJson(json, BehaviorTree.class);
+
+                    // Проверяем результат десериализации
+                    if (tree == null) {
+                        LOGGER.error("!!! MobSpawnEventHandler: Deserialization resulted in NULL tree!");
+                        return null;
+                    }
+
+                    LOGGER.info("!!! MobSpawnEventHandler: Successfully deserialized tree: ID={}, Name={}",
+                            tree.getId(), tree.getName());
+
+                    if (tree.getNodes() == null) {
+                        LOGGER.warn("!!! MobSpawnEventHandler: WARNING - Deserialized tree has NULL nodes list!");
+                    } else if (tree.getNodes().isEmpty()) {
+                        LOGGER.warn("!!! MobSpawnEventHandler: WARNING - Deserialized tree has EMPTY nodes list!");
+                    } else {
+                        LOGGER.info("!!! MobSpawnEventHandler: Deserialized tree has {} nodes", tree.getNodes().size());
+                    }
+
+                    return tree;
+                } catch (Exception e) {
+                    LOGGER.error("!!! ERROR deserializing behavior tree: {}", e.getMessage());
+                    e.printStackTrace();
+
+                    // Можно добавить альтернативный способ загрузки, если текущий не работает...
+                    return null;
+                }
             } else {
-                System.out.println("MobSpawnEventHandler: Behavior tree file not found: " + behaviorFile);
+                LOGGER.warn("!!! MobSpawnEventHandler: Behavior tree file not found: {}", behaviorFile);
+
+                // Можно добавить поиск файла в других местах, если нужно...
                 return null;
             }
         } catch (Exception e) {
-            System.err.println("Error loading behavior tree: " + e.getMessage());
+            LOGGER.error("!!! Error loading behavior tree: {}", e.getMessage());
             e.printStackTrace();
             return null;
         }

@@ -30,10 +30,13 @@ import mod.azure.azurelib.core.animation.RawAnimation;
 import mod.azure.azurelib.core.animation.Animation;
 import mod.azure.azurelib.core.object.PlayState;
 import mod.azure.azurelib.util.AzureLibUtil;
+import org.apache.logging.log4j.LogManager;
+import org.apache.logging.log4j.Logger;
 
 import java.util.Map;
 
 public class CustomMobEntity extends PathfinderMob implements GeoEntity {
+    private static final Logger LOGGER = LogManager.getLogger("CustomMobsForge");
     private static final EntityDataAccessor<String> MOB_ID =
             SynchedEntityData.defineId(CustomMobEntity.class, EntityDataSerializers.STRING);
 
@@ -193,9 +196,15 @@ public class CustomMobEntity extends PathfinderMob implements GeoEntity {
     /**
      * Прямое воспроизведение анимации по имени, без использования маппинга
      */
+    /**
+     * Прямое воспроизведение анимации по имени, без использования маппинга
+     */
+    /**
+     * Прямое воспроизведение анимации по имени, без использования маппинга
+     */
     public void playAnimationDirect(String animationName, boolean loop, float speed) {
-        System.out.println("CustomMobEntity: Directly playing animation '" + animationName +
-                "' for entity " + this.getId() + " (loop: " + loop + ", speed: " + speed + ")");
+        LOGGER.info("CustomMobEntity: Directly playing animation '{}' for entity {} (loop: {}, speed: {})",
+                animationName, this.getId(), loop, speed);
 
         this.currentAnimation = animationName;
         this.isLoopingAnimation = loop;
@@ -203,13 +212,21 @@ public class CustomMobEntity extends PathfinderMob implements GeoEntity {
 
         // Обновляем время последней анимации
         this.lastAnimationTime = System.currentTimeMillis();
+        this.lastPlayedAnimation = animationName; // Добавлено для отслеживания
 
         // Синхронизируем с клиентами
         if (!this.level().isClientSide) {
-            NetworkManager.INSTANCE.send(
-                    PacketDistributor.TRACKING_ENTITY.with(() -> this),
-                    new AnimationSyncPacket(this.getId(), animationName, speed, loop)
-            );
+            try {
+                NetworkManager.INSTANCE.send(
+                        PacketDistributor.TRACKING_ENTITY.with(() -> this),
+                        new AnimationSyncPacket(this.getId(), animationName, speed, loop)
+                );
+                LOGGER.info("CustomMobEntity: Animation sync packet sent to tracking clients for {} on entity {}",
+                        animationName, this.getId());
+            } catch (Exception e) {
+                LOGGER.error("CustomMobEntity: ERROR sending animation sync packet: {}", e.getMessage());
+                e.printStackTrace();
+            }
         }
     }
 

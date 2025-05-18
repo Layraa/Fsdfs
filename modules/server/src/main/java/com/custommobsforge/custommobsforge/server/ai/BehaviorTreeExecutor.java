@@ -9,10 +9,12 @@ import com.custommobsforge.custommobsforge.common.network.packet.PlayBehaviorNod
 import net.minecraft.server.level.ServerLevel;
 import net.minecraft.world.entity.ai.goal.Goal;
 import net.minecraftforge.network.PacketDistributor;
-
+import org.apache.logging.log4j.LogManager;
+import org.apache.logging.log4j.Logger;
 import java.util.*;
 
 public class BehaviorTreeExecutor extends Goal {
+    private static final Logger LOGGER = LogManager.getLogger("CustomMobsForge");
     private final CustomMobEntity entity;
     private final BehaviorTree tree;
     private final Map<String, NodeExecutor> nodeExecutors = new HashMap<>();
@@ -23,6 +25,7 @@ public class BehaviorTreeExecutor extends Goal {
 
     // Конструктор
     public BehaviorTreeExecutor(CustomMobEntity entity, BehaviorTree tree) {
+
         this.entity = entity;
         this.tree = tree;
 
@@ -98,24 +101,24 @@ public class BehaviorTreeExecutor extends Goal {
     public void tick() {
         // Отладочный вывод при первом тике
         if (executionTicks == 0) {
-            System.out.println("BehaviorTreeExecutor: First tick for entity " + entity.getId() +
-                    ", root node: " + currentRootNodeId);
+            LOGGER.info("BehaviorTreeExecutor: First tick for entity {} with root node: {}",
+                        entity.getId(), currentRootNodeId);
 
             // Выводим все узлы дерева для отладки
             if (tree != null && tree.getNodes() != null) {
-                System.out.println("Tree nodes (" + tree.getNodes().size() + "):");
+                LOGGER.info("Tree nodes ({}): ", tree.getNodes().size());
                 for (BehaviorNode node : tree.getNodes()) {
-                    System.out.println("  - " + node.getId() + " (" + node.getType() + "): " + node.getDescription());
+                    LOGGER.info("  - {} ({}): {}", node.getId(), node.getType(), node.getDescription());
                 }
             } else {
-                System.out.println("Tree or nodes is null!");
+                LOGGER.error("ERROR: Tree or nodes is null!");
             }
 
             // Выводим все соединения
             if (tree != null && tree.getConnections() != null) {
-                System.out.println("Tree connections (" + tree.getConnections().size() + "):");
+                LOGGER.info("Tree connections ({}): ", tree.getConnections().size());
                 for (BehaviorConnection conn : tree.getConnections()) {
-                    System.out.println("  - " + conn.getSourceNodeId() + " -> " + conn.getTargetNodeId());
+                    LOGGER.info("  - {} -> {}", conn.getSourceNodeId(), conn.getTargetNodeId());
                 }
             }
         }
@@ -124,38 +127,38 @@ public class BehaviorTreeExecutor extends Goal {
 
         // Обновляем дерево с заданным интервалом
         if (executionTicks % executionInterval == 0) {
-            System.out.println("BehaviorTreeExecutor: Executing tree for entity " + entity.getId() +
-                    " at tick " + executionTicks);
-            executeTree();
+            LOGGER.info("BehaviorTreeExecutor: Executing tree for entity {} at tick {}",
+                    entity.getId(), executionTicks);
+            boolean success = executeTree();
+            LOGGER.info("BehaviorTreeExecutor: Tree execution result: {}", success);
         }
     }
 
     // Метод выполнения дерева поведения
-    private void executeTree() {
+    private boolean executeTree() {
         if (tree == null || currentRootNodeId == null) {
-            System.out.println("BehaviorTreeExecutor: Cannot execute tree - " +
-                    (tree == null ? "tree is null" : "root node ID is null"));
-            return;
+            LOGGER.error("BehaviorTreeExecutor: Cannot execute tree - {} for entity {}",
+                    (tree == null ? "tree is null" : "root node ID is null"), entity.getId());
+            return false;
         }
 
         // Получаем корневой узел
         BehaviorNode rootNode = tree.getNode(currentRootNodeId);
         if (rootNode == null) {
-            System.out.println("BehaviorTreeExecutor: Root node with ID " + currentRootNodeId + " not found in tree!");
-            return;
+            LOGGER.error("BehaviorTreeExecutor: Root node with ID {} not found in tree!", currentRootNodeId);
+            return false;
         }
 
-        System.out.println("BehaviorTreeExecutor: Executing root node " + rootNode.getId() +
-                " of type " + rootNode.getType());
+        LOGGER.info("BehaviorTreeExecutor: Executing root node {} of type {}", rootNode.getId(), rootNode.getType());
 
         // Выполняем корневой узел
-        executeNode(rootNode);
+        return executeNode(rootNode);
     }
 
     // Рекурсивное выполнение узла и его потомков
     public boolean executeNode(BehaviorNode node) {
         if (node == null) {
-            System.out.println("BehaviorTreeExecutor: Node is null, cannot execute");
+            LOGGER.error("BehaviorTreeExecutor: Node is null, cannot execute");
             return false;
         }
 
@@ -164,29 +167,34 @@ public class BehaviorTreeExecutor extends Goal {
 
         // Если нет обработчика для этого типа узла, прерываем
         if (executor == null) {
-            System.out.println("BehaviorTreeExecutor: No executor found for node type: " + nodeType);
-            System.out.println("Available node types: " + String.join(", ", nodeExecutors.keySet()));
+            LOGGER.error("BehaviorTreeExecutor: No executor found for node type: {}", nodeType);
+            LOGGER.info("Available node types: {}", String.join(", ", nodeExecutors.keySet()));
             return false;
         }
 
-        System.out.println("BehaviorTreeExecutor: Executing node " + node.getId() +
-                " of type " + node.getType() +
-                " with description: " + node.getDescription());
+        LOGGER.info("BehaviorTreeExecutor: Executing node {} of type {} with description: {}",
+                node.getId(), node.getType(), node.getDescription());
 
         // Отправляем пакет о выполнении узла клиентам
         if (entity.level() instanceof ServerLevel) {
-            NetworkManager.INSTANCE.send(
-                    PacketDistributor.TRACKING_ENTITY.with(() -> entity),
-                    new PlayBehaviorNodePacket(entity.getId(), node.getId(), node.getType())
-            );
+            try {
+                NetworkManager.INSTANCE.send(
+                        PacketDistributor.TRACKING_ENTITY.with(() -> entity),
+                        new PlayBehaviorNodePacket(entity.getId(), node.getId(), node.getType())
+                );
+                LOGGER.info("BehaviorTreeExecutor: Sent PlayBehaviorNodePacket to clients for node {}", node.getId());
+            } catch (Exception e) {
+                LOGGER.error("BehaviorTreeExecutor: Error sending PlayBehaviorNodePacket: {}", e.getMessage());
+            }
         }
 
         // Выполняем узел с помощью соответствующего обработчика
         boolean result = executor.execute(entity, node, this);
-        System.out.println("BehaviorTreeExecutor: Node " + node.getId() + " execution result: " + result);
+        LOGGER.info("BehaviorTreeExecutor: Node {} execution result: {}", node.getId(), result);
 
         return result;
     }
+
 
     // Вспомогательные методы для обработчиков узлов
 

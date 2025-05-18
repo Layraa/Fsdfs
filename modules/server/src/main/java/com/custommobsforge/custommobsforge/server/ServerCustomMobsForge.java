@@ -22,6 +22,14 @@ public class ServerCustomMobsForge {
     public ServerCustomMobsForge() {
         IEventBus modEventBus = FMLJavaModLoadingContext.get().getModEventBus();
 
+        System.out.println("!!!!!!!! ServerCustomMobsForge: Initializing and registering event handlers !!!!!!!!");
+
+        // Явно зарегистрируйте обработчик
+        net.minecraftforge.common.MinecraftForge.EVENT_BUS.register(MobSpawnEventHandler.class);
+
+        // Добавьте проверку после регистрации
+        System.out.println("!!!!!!!! ServerCustomMobsForge: MobSpawnEventHandler registered !!!!!!!!");
+
         // Регистрируем события жизненного цикла
         modEventBus.addListener(this::serverSetup);
 
