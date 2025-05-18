@@ -16,12 +16,16 @@ public class SaveMobDataPacket {
         this.mobData = mobData;
     }
 
-    // Метод для получения данных моба - ЭТОТ МЕТОД ОТСУТСТВОВАЛ
+    // Метод для получения данных моба
     public MobData getMobData() {
         return mobData;
     }
 
     public static void encode(SaveMobDataPacket message, FriendlyByteBuf buffer) {
+        // ДОБАВЛЕНО: Логирование
+        System.out.println("Encoding SaveMobDataPacket for mob: " +
+                (message.mobData != null ? message.mobData.getName() + " (ID: " + message.mobData.getId() + ")" : "null"));
+
         if (message.mobData != null) {
             message.mobData.writeToBuffer(buffer);
         } else {
@@ -35,6 +39,9 @@ public class SaveMobDataPacket {
             // Проверяем, есть ли данные для чтения
             if (buffer.isReadable()) {
                 MobData data = MobData.readFromBuffer(buffer);
+                // ДОБАВЛЕНО: Логирование
+                System.out.println("Decoded SaveMobDataPacket for mob: " +
+                        (data != null ? data.getName() + " (ID: " + data.getId() + ")" : "null"));
                 return new SaveMobDataPacket(data);
             } else {
                 System.err.println("Error decoding SaveMobDataPacket: Buffer not readable");
@@ -54,7 +61,8 @@ public class SaveMobDataPacket {
             try {
                 ServerPlayer player = context.getSender();
                 if (player != null && player.hasPermissions(2)) { // Проверка прав оператора
-                    System.out.println("Received SaveMobDataPacket from player: " + player.getName().getString());
+                    // ДОБАВЛЕНО: Расширенное логирование
+                    System.out.println("Server handling SaveMobDataPacket from player: " + player.getName().getString());
 
                     // Проверим, что данные не null
                     if (message.getMobData() == null) {
@@ -62,9 +70,16 @@ public class SaveMobDataPacket {
                         return;
                     }
 
+                    // ДОБАВЛЕНО: Подробное логирование перед публикацией события
+                    System.out.println("Publishing SaveMobDataEvent for mob: " + message.getMobData().getName() +
+                            " (ID: " + message.getMobData().getId() + ")");
+
                     // Публикуем событие с полученными данными
-                    MinecraftForge.EVENT_BUS.post(
+                    boolean eventPosted = MinecraftForge.EVENT_BUS.post(
                             new SaveMobDataEvent(message.getMobData(), player));
+
+                    // ДОБАВЛЕНО: Проверка результата публикации события
+                    System.out.println("SaveMobDataEvent posted successfully: " + !eventPosted);
                 } else {
                     System.err.println("Error: Player is null or doesn't have permissions");
                 }

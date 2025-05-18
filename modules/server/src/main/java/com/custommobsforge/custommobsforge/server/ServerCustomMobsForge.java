@@ -24,7 +24,9 @@ public class ServerCustomMobsForge {
 
         // Регистрируем события жизненного цикла
         modEventBus.addListener(this::serverSetup);
-        modEventBus.addListener(this::registerAttributes);
+
+        // ПРИМЕЧАНИЕ: Мы удалили регистрацию атрибутов здесь, так как она теперь в общем модуле
+        // modEventBus.addListener(this::registerAttributes);
 
         // Регистрируем обработчики событий
         net.minecraftforge.common.MinecraftForge.EVENT_BUS.register(this);
@@ -37,17 +39,21 @@ public class ServerCustomMobsForge {
     private void serverSetup(FMLCommonSetupEvent event) {
         event.enqueueWork(() -> {
             // Инициализация серверных компонентов
+            System.out.println("ServerCustomMobsForge: Server components initialized");
         });
     }
 
+    /* УДАЛЕНО: Теперь в общем модуле
     @SubscribeEvent
     public void registerAttributes(EntityAttributeCreationEvent event) {
         // Регистрируем атрибуты для нашего моба
         event.put(EntityRegistry.CUSTOM_MOB.get(), CustomMobEntity.createAttributes().build());
     }
+    */
 
     @SubscribeEvent
     public void onServerStarting(ServerStartingEvent event) {
         // Инициализация компонентов при запуске сервера
+        System.out.println("ServerCustomMobsForge: Server starting");
     }
 }

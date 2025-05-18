@@ -14,12 +14,21 @@ public class CustomMobRenderer extends GeoEntityRenderer<CustomMobEntity> {
 
     public CustomMobRenderer(EntityRendererProvider.Context renderManager) {
         super(renderManager, new CustomMobModel());
+
+        // ДОБАВЛЕНО: Логирование
+        System.out.println("CustomMobRenderer: Created new renderer instance");
     }
 
     @Override
     public void render(CustomMobEntity entity, float entityYaw, float partialTick, PoseStack poseStack,
                        MultiBufferSource bufferSource, int packedLight) {
-        // Можно добавить специальные эффекты рендеринга
+        // ДОБАВЛЕНО: Логирование первого вызова рендера
+        if (entity != null) {
+            // ИСПРАВЛЕНО: Используем правильный метод вместо getRegistryName()
+            ResourceLocation entityId = net.minecraftforge.registries.ForgeRegistries.ENTITY_TYPES.getKey(entity.getType());
+            System.out.println("CustomMobRenderer: Rendering entity " + entity.getId() + " of type " +
+                    (entityId != null ? entityId.toString() : "unknown"));
+        }
 
         // Вызываем базовый метод рендеринга
         super.render(entity, entityYaw, partialTick, poseStack, bufferSource, packedLight);

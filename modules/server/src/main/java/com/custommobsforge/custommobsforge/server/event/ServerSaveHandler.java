@@ -24,6 +24,10 @@ public class ServerSaveHandler {
 
     @SubscribeEvent
     public static void onSaveMobData(SaveMobDataEvent event) {
+        // ДОБАВЛЕНО: Больше логирования
+        System.out.println("Server received SaveMobDataEvent for mob: " + event.getMobData().getName() +
+                " (ID: " + event.getMobData().getId() + ") from player: " + event.getPlayer().getName().getString());
+
         ServerLevel level = (ServerLevel) event.getPlayer().level();
         MobData mobData = event.getMobData();
 
@@ -33,8 +37,12 @@ public class ServerSaveHandler {
 
     @SubscribeEvent
     public static void onSaveBehaviorTree(SaveBehaviorTreeEvent event) {
+        // ДОБАВЛЕНО: Больше логирования
+        System.out.println("Server received SaveBehaviorTreeEvent for tree: " + event.getBehaviorTree().getName() +
+                " (ID: " + event.getBehaviorTree().getId() + ") from player: " + event.getPlayer().getName().getString());
+
         ServerPlayer player = event.getPlayer();
-        ServerLevel level = (ServerLevel) player.level(); // ← исправлено здесь
+        ServerLevel level = (ServerLevel) player.level();
         BehaviorTree tree = event.getBehaviorTree();
 
         // Сохраняем дерево поведения на сервере
@@ -44,10 +52,15 @@ public class ServerSaveHandler {
     // Метод для сохранения данных моба на сервере
     private static void saveMobData(MobData mobData, ServerLevel level) {
         try {
+            // ДОБАВЛЕНО: Логирование перед сохранением
+            System.out.println("Saving mob data to server for: " + mobData.getName() + " (ID: " + mobData.getId() + ")");
+
             // Вызываем метод из MobConfigManager для сохранения на сервере
             MobConfigManager.saveMobConfig(mobData, level);
 
-            System.out.println("Mob data saved to server: " + mobData.getName());
+            // ИЗМЕНЕНО: Добавили больше информации в лог
+            String worldPath = level.getServer().getWorldPath(LevelResource.ROOT).toString();
+            System.out.println("Mob data successfully saved to server at: " + worldPath + "/custommobsforge/mobs/" + mobData.getId() + ".json");
         } catch (Exception e) {
             System.err.println("Error saving mob data on server: " + e.getMessage());
             e.printStackTrace();
@@ -57,11 +70,16 @@ public class ServerSaveHandler {
     // Метод для сохранения дерева поведения на сервере
     private static void saveBehaviorTree(BehaviorTree tree, ServerLevel level) {
         try {
+            // ДОБАВЛЕНО: Логирование перед сохранением
+            System.out.println("Saving behavior tree to server for: " + tree.getName() + " (ID: " + tree.getId() + ")");
+
             // Здесь нужно добавить метод в MobConfigManager для сохранения дерева
             // Для примера создадим собственную реализацию
             saveBehaviorTreeToServer(tree, level);
 
-            System.out.println("Behavior tree saved to server: " + tree.getName());
+            // ИЗМЕНЕНО: Добавили больше информации в лог
+            String worldPath = level.getServer().getWorldPath(LevelResource.ROOT).toString();
+            System.out.println("Behavior tree successfully saved to server at: " + worldPath + "/custommobsforge/behaviors/" + tree.getId() + ".json");
         } catch (Exception e) {
             System.err.println("Error saving behavior tree on server: " + e.getMessage());
             e.printStackTrace();
@@ -84,7 +102,8 @@ public class ServerSaveHandler {
             String json = GSON.toJson(tree);
             Files.write(filePath, json.getBytes(StandardCharsets.UTF_8));
 
-            System.out.println("Behavior tree saved to: " + filePath);
+            // ДОБАВЛЕНО: Подробное логирование о сохранении файла
+            System.out.println("Behavior tree saved to file: " + filePath.toString() + " (Size: " + json.length() + " bytes)");
         } catch (Exception e) {
             System.err.println("Error saving behavior tree file: " + e.getMessage());
             e.printStackTrace();

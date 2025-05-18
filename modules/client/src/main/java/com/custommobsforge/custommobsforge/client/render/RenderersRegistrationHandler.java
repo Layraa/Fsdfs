@@ -10,7 +10,16 @@ import net.minecraftforge.client.event.EntityRenderersEvent;
 public class RenderersRegistrationHandler {
 
     public static void registerEntityRenderers(EntityRenderersEvent.RegisterRenderers event) {
+        // ДОБАВЛЕНО: Подробное логирование
+        System.out.println("RenderersRegistrationHandler: Registering entity renderer for CustomMobEntity");
+
         // Регистрируем рендерер для кастомных мобов
-        event.registerEntityRenderer(EntityRegistry.CUSTOM_MOB.get(), CustomMobRenderer::new);
+        try {
+            event.registerEntityRenderer(EntityRegistry.CUSTOM_MOB.get(), CustomMobRenderer::new);
+            System.out.println("RenderersRegistrationHandler: Renderer registration successful");
+        } catch (Exception e) {
+            System.err.println("RenderersRegistrationHandler: Failed to register entity renderer: " + e.getMessage());
+            e.printStackTrace();
+        }
     }
 }

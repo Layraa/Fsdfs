@@ -25,8 +25,14 @@ public class CustomMobsForgeClient {
     private static boolean isGuiLaunched = false;
 
     public CustomMobsForgeClient() {
+        System.out.println("CustomMobsForgeClient: Initializing client side mod");
+
         // Регистрация обработчиков событий
         FMLJavaModLoadingContext.get().getModEventBus().addListener(this::clientSetup);
+
+        // ИЗМЕНЕНО: Зарегистрируем явно событие рендерера entity - это самое важное
+        FMLJavaModLoadingContext.get().getModEventBus().addListener(this::registerEntityRenderers);
+
         MinecraftForge.EVENT_BUS.register(this);
         MinecraftForge.EVENT_BUS.register(CommandRegistrationHandler.class);
         MinecraftForge.EVENT_BUS.register(AnimationHandler.class);
@@ -43,10 +49,19 @@ public class CustomMobsForgeClient {
     private void clientSetup(FMLClientSetupEvent event) {
         // Инициализация клиентского кэша
         MobDataCache.init();
+        System.out.println("CustomMobsForgeClient: Client cache initialized");
     }
 
+    // ДОБАВЛЕНО: Явная регистрация рендереров для сущностей
+    private void registerEntityRenderers(EntityRenderersEvent.RegisterRenderers event) {
+        System.out.println("CustomMobsForgeClient: Registering entity renderers");
+        RenderersRegistrationHandler.registerEntityRenderers(event);
+    }
+
+    // Оставляем существующий обработчик как запасной вариант
     @SubscribeEvent
     public static void registerRenderers(EntityRenderersEvent.RegisterRenderers event) {
+        System.out.println("CustomMobsForgeClient: Static renderer registration");
         RenderersRegistrationHandler.registerEntityRenderers(event);
     }
 }
