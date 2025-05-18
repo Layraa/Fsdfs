@@ -30,29 +30,41 @@ public class MobSpawnEventHandler {
             CustomMobEntity entity = (CustomMobEntity) event.getEntity();
             ServerLevel level = (ServerLevel) event.getLevel();
 
+            // Расширенное логирование
+            System.out.println("MobSpawnEventHandler: CustomMobEntity joined world - ID: " + entity.getId() +
+                    ", mobId: " + entity.getMobId() +
+                    ", hasData: " + (entity.getMobData() != null));
+
             // Если у моба уже есть данные, пропускаем
             if (entity.getMobData() != null) {
+                System.out.println("MobSpawnEventHandler: Entity already has mob data, skipping configuration");
                 return;
             }
 
             // Получаем ID моба
             String mobId = entity.getMobId();
             if (mobId == null || mobId.isEmpty()) {
+                System.out.println("MobSpawnEventHandler: Entity has no mob ID, skipping configuration");
                 return;
             }
 
             // Загружаем данные моба
             MobData mobData = MobConfigManager.loadMobConfig(mobId, level);
             if (mobData == null) {
+                System.out.println("MobSpawnEventHandler: Could not load mob data for ID: " + mobId);
                 return;
             }
 
             // Устанавливаем данные
+            System.out.println("MobSpawnEventHandler: Setting mob data for entity " + entity.getId() +
+                    " with model: " + mobData.getModelPath() +
+                    ", texture: " + mobData.getTexturePath());
             entity.setMobData(mobData);
 
             // Если у моба есть дерево поведения, добавляем соответствующую цель
             if (mobData.getBehaviorTree() != null) {
                 entity.goalSelector.addGoal(1, new BehaviorTreeExecutor(entity, mobData.getBehaviorTree()));
+                System.out.println("MobSpawnEventHandler: Added behavior tree executor for entity " + entity.getId());
             }
 
             // Воспроизводим анимацию появления

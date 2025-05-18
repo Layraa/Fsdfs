@@ -1,5 +1,7 @@
 package com.custommobsforge.custommobsforge.common.network.packet;
 
+import com.custommobsforge.custommobsforge.common.entity.CustomMobEntity;
+import net.minecraft.client.Minecraft;
 import net.minecraft.network.FriendlyByteBuf;
 import net.minecraft.world.entity.Entity;
 import net.minecraftforge.network.NetworkEvent;
@@ -39,11 +41,25 @@ public class AnimationSyncPacket {
         NetworkEvent.Context context = contextSupplier.get();
 
         context.enqueueWork(() -> {
-            // На клиенте мы находим сущность и устанавливаем анимацию
-            // Это будет реализовано в клиентском модуле
+            System.out.println("AnimationSyncPacket: Received animation sync for entity ID " +
+                    message.getEntityId() + ", animation: " + message.getAnimationId() +
+                    ", loop: " + message.isLoop() + ", speed: " + message.getAnimationSpeed());
 
-            // Здесь будет вызов клиентского кода для обработки анимации
-            // com.custommobsforge.custommobsforge.client.animation.AnimationHandler.handleAnimationSync(message);
+            // На клиенте находим сущность и устанавливаем анимацию
+            if (Minecraft.getInstance().level != null) {
+                Entity entity = Minecraft.getInstance().level.getEntity(message.getEntityId());
+                if (entity instanceof CustomMobEntity) {
+                    CustomMobEntity mobEntity = (CustomMobEntity) entity;
+                    System.out.println("AnimationSyncPacket: Setting animation for entity " + entity.getId() +
+                            ": " + message.getAnimationId());
+                    mobEntity.setAnimation(message.getAnimationId(), message.isLoop(), message.getAnimationSpeed());
+                } else {
+                    System.out.println("AnimationSyncPacket: Entity not found or not CustomMobEntity: " +
+                            message.getEntityId());
+                }
+            } else {
+                System.out.println("AnimationSyncPacket: Client level is null");
+            }
         });
 
         context.setPacketHandled(true);

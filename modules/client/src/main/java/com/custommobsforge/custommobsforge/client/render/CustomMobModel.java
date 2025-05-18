@@ -1,9 +1,11 @@
 package com.custommobsforge.custommobsforge.client.render;
 
-import com.custommobsforge.custommobsforge.client.cache.MobDataCache;
 import com.custommobsforge.custommobsforge.common.data.MobData;
 import com.custommobsforge.custommobsforge.common.entity.CustomMobEntity;
+import com.custommobsforge.custommobsforge.common.network.NetworkManager;
+import com.custommobsforge.custommobsforge.common.network.packet.RequestMobDataPacket;
 import mod.azure.azurelib.model.DefaultedEntityGeoModel;
+import net.minecraft.client.Minecraft;
 import net.minecraft.client.renderer.RenderType;
 import net.minecraft.resources.ResourceLocation;
 
@@ -23,8 +25,20 @@ public class CustomMobModel extends DefaultedEntityGeoModel<CustomMobEntity> {
         System.out.println("CustomMobModel: Getting model resource for entity " +
                 (entity != null ? entity.getId() + ", mobId: " + entity.getMobId() : "null"));
 
-        // Получаем данные моба
-        MobData mobData = getMobData(entity);
+        // Получаем данные моба напрямую из сущности
+        MobData mobData = entity.getMobData();
+
+        // Если данных нет в сущности, запрашиваем с сервера
+        if (mobData == null && entity != null && entity.getMobId() != null && !entity.getMobId().isEmpty()) {
+            System.out.println("CustomMobModel: No mob data found for entity " + entity.getId() +
+                    ", requesting from server for ID: " + entity.getMobId());
+            if (Minecraft.getInstance().getConnection() != null) {
+                NetworkManager.INSTANCE.sendToServer(new RequestMobDataPacket(entity.getMobId()));
+            }
+            // Данные придут асинхронно, поэтому возвращаем модель по умолчанию
+            System.out.println("CustomMobModel: Using default model while waiting for server data");
+            return new ResourceLocation("custommobsforge", "geo/custom_mob.geo.json");
+        }
 
         if (mobData != null && mobData.getModelPath() != null) {
             // ИЗМЕНЕНО: Улучшенный метод преобразования путей ресурсов
@@ -41,10 +55,10 @@ public class CustomMobModel extends DefaultedEntityGeoModel<CustomMobEntity> {
     @Override
     public ResourceLocation getTextureResource(CustomMobEntity entity) {
         System.out.println("CustomMobModel: Getting texture resource for entity " +
-                (entity != null ? entity.getId() : "null"));
+                (entity != null ? entity.getId() + ", mobId: " + entity.getMobId() : "null"));
 
-        // Получаем данные моба
-        MobData mobData = getMobData(entity);
+        // Получаем данные моба напрямую из сущности
+        MobData mobData = entity.getMobData();
 
         if (mobData != null && mobData.getTexturePath() != null) {
             // ИЗМЕНЕНО: Улучшенный метод преобразования путей ресурсов
@@ -61,10 +75,10 @@ public class CustomMobModel extends DefaultedEntityGeoModel<CustomMobEntity> {
     @Override
     public ResourceLocation getAnimationResource(CustomMobEntity entity) {
         System.out.println("CustomMobModel: Getting animation resource for entity " +
-                (entity != null ? entity.getId() : "null"));
+                (entity != null ? entity.getId() + ", mobId: " + entity.getMobId() : "null"));
 
-        // Получаем данные моба
-        MobData mobData = getMobData(entity);
+        // Получаем данные моба напрямую из сущности
+        MobData mobData = entity.getMobData();
 
         if (mobData != null && mobData.getAnimationFilePath() != null) {
             // ИЗМЕНЕНО: Улучшенный метод преобразования путей ресурсов
@@ -90,32 +104,6 @@ public class CustomMobModel extends DefaultedEntityGeoModel<CustomMobEntity> {
     @Override
     public RenderType getRenderType(CustomMobEntity entity, ResourceLocation texture) {
         return RenderType.entityTranslucent(texture);
-    }
-
-    // Вспомогательные методы
-
-    private MobData getMobData(CustomMobEntity entity) {
-        if (entity == null) {
-            System.out.println("CustomMobModel: Entity is null, cannot get mob data");
-            return null;
-        }
-
-        // Сначала пробуем получить из самой сущности
-        MobData mobData = entity.getMobData();
-
-        // Если нет данных, пробуем получить из кэша по ID
-        if (mobData == null && entity.getMobId() != null && !entity.getMobId().isEmpty()) {
-            System.out.println("CustomMobModel: Getting mob data from cache for ID: " + entity.getMobId());
-            mobData = MobDataCache.getMobData(entity.getMobId());
-        } else if (mobData != null) {
-            System.out.println("CustomMobModel: Using mob data from entity");
-        }
-
-        if (mobData == null) {
-            System.out.println("CustomMobModel: No mob data found for entity " + entity.getId());
-        }
-
-        return mobData;
     }
 
     // ИЗМЕНЕНО: Полностью переписанный метод для корректного преобразования путей ресурсов
@@ -152,17 +140,5 @@ public class CustomMobModel extends DefaultedEntityGeoModel<CustomMobEntity> {
         // относительный путь в пространстве имен нашего мода
         System.out.println("CustomMobModel: Falling back to default namespace with path: " + path);
         return new ResourceLocation("custommobsforge", path);
-    }
-
-    private boolean resourceExists(ResourceLocation resourceLocation) {
-        try {
-            // Проверяем, существует ли ресурс
-            net.minecraft.client.Minecraft.getInstance().getResourceManager()
-                    .getResource(resourceLocation).isPresent();
-            return true;
-        } catch (Exception e) {
-            System.out.println("Resource not found: " + resourceLocation);
-            return false;
-        }
     }
 }

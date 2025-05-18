@@ -34,15 +34,26 @@ public class RequestMobDataPacket {
             if (player != null) {
                 ServerLevel level = (ServerLevel) player.level();
 
+                // Улучшенное логирование
+                System.out.println("RequestMobDataPacket: Received request for mob data with ID: " + message.mobId +
+                        " from player: " + player.getName().getString());
+
                 // Загрузка данных моба
                 MobData mobData = MobConfigManager.loadMobConfig(message.mobId, level);
 
                 if (mobData != null) {
+                    System.out.println("RequestMobDataPacket: Found mob data for ID: " + message.mobId +
+                            ", name: " + mobData.getName() +
+                            ", model: " + mobData.getModelPath() +
+                            ", texture: " + mobData.getTexturePath());
+
                     // Отправляем данные клиенту
                     NetworkManager.INSTANCE.send(
                             PacketDistributor.PLAYER.with(() -> player),
                             new MobDataPacket(mobData)
                     );
+                } else {
+                    System.out.println("RequestMobDataPacket: Mob data not found for ID: " + message.mobId);
                 }
             }
         });

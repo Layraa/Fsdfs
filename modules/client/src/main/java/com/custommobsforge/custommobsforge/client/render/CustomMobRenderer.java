@@ -15,19 +15,25 @@ public class CustomMobRenderer extends GeoEntityRenderer<CustomMobEntity> {
     public CustomMobRenderer(EntityRendererProvider.Context renderManager) {
         super(renderManager, new CustomMobModel());
 
-        // ДОБАВЛЕНО: Логирование
         System.out.println("CustomMobRenderer: Created new renderer instance");
     }
 
     @Override
     public void render(CustomMobEntity entity, float entityYaw, float partialTick, PoseStack poseStack,
                        MultiBufferSource bufferSource, int packedLight) {
-        // ДОБАВЛЕНО: Логирование первого вызова рендера
+        // Расширенное логирование для отладки
         if (entity != null) {
-            // ИСПРАВЛЕНО: Используем правильный метод вместо getRegistryName()
             ResourceLocation entityId = net.minecraftforge.registries.ForgeRegistries.ENTITY_TYPES.getKey(entity.getType());
-            System.out.println("CustomMobRenderer: Rendering entity " + entity.getId() + " of type " +
-                    (entityId != null ? entityId.toString() : "unknown"));
+            System.out.println("CustomMobRenderer: Rendering entity " + entity.getId() +
+                    " of type " + (entityId != null ? entityId.toString() : "unknown") +
+                    ", mobId: " + entity.getMobId() +
+                    ", hasData: " + (entity.getMobData() != null ? "yes" : "no"));
+
+            if (entity.getMobData() != null) {
+                System.out.println("  -> model: " + entity.getMobData().getModelPath());
+                System.out.println("  -> texture: " + entity.getMobData().getTexturePath());
+                System.out.println("  -> animation: " + entity.getMobData().getAnimationFilePath());
+            }
         }
 
         // Вызываем базовый метод рендеринга
