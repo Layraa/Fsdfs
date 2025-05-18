@@ -7,9 +7,9 @@ import net.minecraftforge.fml.common.Mod;
 import net.minecraftforge.fml.event.lifecycle.FMLCommonSetupEvent;
 import net.minecraftforge.fml.javafmlmod.FMLJavaModLoadingContext;
 
-@Mod("custommobsforge")
+@Mod("custommobsforge_common")  // Изменено для соответствия mods.toml
 public class CommonCustomMobsForge {
-    public static final String MOD_ID = "custommobsforge";
+    public static final String MOD_ID = "custommobsforge_common";  // Также обновляем константу
 
     public CommonCustomMobsForge() {
         IEventBus modEventBus = FMLJavaModLoadingContext.get().getModEventBus();

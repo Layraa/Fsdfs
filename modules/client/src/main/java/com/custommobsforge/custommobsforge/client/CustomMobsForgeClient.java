@@ -18,8 +18,10 @@ import net.minecraftforge.fml.event.lifecycle.FMLClientSetupEvent;
 import net.minecraftforge.fml.javafmlmod.FMLJavaModLoadingContext;
 import javafx.application.Platform;
 
+@Mod("custommobsforge_client")
 @Mod.EventBusSubscriber(modid = CommonCustomMobsForge.MOD_ID, value = Dist.CLIENT, bus = Mod.EventBusSubscriber.Bus.MOD)
 public class CustomMobsForgeClient {
+    public static final String MOD_ID = "custommobsforge_client";
     private static boolean isGuiLaunched = false;
 
     public CustomMobsForgeClient() {

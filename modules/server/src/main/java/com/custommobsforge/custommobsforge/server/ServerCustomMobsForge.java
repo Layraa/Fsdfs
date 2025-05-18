@@ -3,6 +3,7 @@ package com.custommobsforge.custommobsforge.server;
 import com.custommobsforge.custommobsforge.common.registry.EntityRegistry;
 import com.custommobsforge.custommobsforge.server.commands.ServerCommandRegistrationHandler;
 import com.custommobsforge.custommobsforge.server.event.MobSpawnEventHandler;
+import com.custommobsforge.custommobsforge.server.event.ServerSaveHandler;
 import com.custommobsforge.custommobsforge.server.event.ServerTickHandler;
 import net.minecraft.world.entity.ai.attributes.AttributeSupplier;
 import net.minecraftforge.event.entity.EntityAttributeCreationEvent;
@@ -16,6 +17,7 @@ import com.custommobsforge.custommobsforge.common.entity.CustomMobEntity;
 
 @Mod("custommobsforge_server")
 public class ServerCustomMobsForge {
+    public static final String MOD_ID = "custommobsforge_server";  // Добавляем константу
 
     public ServerCustomMobsForge() {
         IEventBus modEventBus = FMLJavaModLoadingContext.get().getModEventBus();
@@ -26,6 +28,7 @@ public class ServerCustomMobsForge {
 
         // Регистрируем обработчики событий
         net.minecraftforge.common.MinecraftForge.EVENT_BUS.register(this);
+        net.minecraftforge.common.MinecraftForge.EVENT_BUS.register(ServerSaveHandler.class);
         net.minecraftforge.common.MinecraftForge.EVENT_BUS.register(ServerCommandRegistrationHandler.class);
         net.minecraftforge.common.MinecraftForge.EVENT_BUS.register(MobSpawnEventHandler.class);
         net.minecraftforge.common.MinecraftForge.EVENT_BUS.register(ServerTickHandler.class);

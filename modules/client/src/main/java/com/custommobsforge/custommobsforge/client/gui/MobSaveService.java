@@ -1,41 +1,195 @@
 package com.custommobsforge.custommobsforge.client.gui;
 
-import com.custommobsforge.custommobsforge.client.gui.AnimationConfig;
+import com.custommobsforge.custommobsforge.common.data.MobData;
+import com.custommobsforge.custommobsforge.common.data.BehaviorTree;
+import com.custommobsforge.custommobsforge.common.data.AnimationMapping;
+import com.custommobsforge.custommobsforge.common.data.BehaviorNode;
+import com.custommobsforge.custommobsforge.common.data.BehaviorConnection;
+import com.custommobsforge.custommobsforge.common.network.NetworkManager;
+import com.custommobsforge.custommobsforge.common.network.packet.SaveMobDataPacket;
+import com.custommobsforge.custommobsforge.common.network.packet.SaveBehaviorTreePacket;
+import com.google.gson.Gson;
+import com.google.gson.GsonBuilder;
+import com.google.gson.JsonSyntaxException;
+import org.json.JSONArray;
+import org.json.JSONObject;
+
 import java.io.*;
+import java.nio.charset.StandardCharsets;
 import java.nio.file.*;
 import java.util.*;
 import java.util.stream.Collectors;
-import org.json.*;
 
-/**
- * Сервис для сохранения и загрузки конфигураций мобов
- */
 public class MobSaveService {
-    // Директория для сохранения конфигураций мобов
+    // Локальные директории для кэширования (не изменяются)
     private static final String MOBS_DIRECTORY = "config/custommobsforge/mobs/";
-
-    // Директория для сохранения деревьев поведения
     private static final String BEHAVIORS_DIRECTORY = "config/custommobsforge/behaviors/";
+    private static final Gson GSON = new GsonBuilder().setPrettyPrinting().create();
 
     /**
-     * Сохранить конфигурацию моба
-     */
-    /**
-     * Сохранить конфигурацию моба вместе с деревом поведения в один файл
-     */
-    /**
-     * Сохранить конфигурацию моба
-     */
-    /**
-     * Сохранить конфигурацию моба
-     */
-    /**
-     * Сохранить конфигурацию моба
-     */
-    /**
-     * Сохранить конфигурацию моба
+     * Сохраняет конфигурацию моба
      */
     public boolean saveMob(MobConfig mobConfig) {
+        try {
+            // 1. Сохраняем локальную копию для кэширования
+            saveLocalMobCopy(mobConfig);
+
+            // 2. Конвертируем в MobData для отправки на сервер
+            MobData mobData = convertToMobData(mobConfig);
+
+            // 3. Отправляем пакет на сервер
+            NetworkManager.INSTANCE.sendToServer(new SaveMobDataPacket(mobData));
+
+            System.out.println("Sent mob data to server: " + mobConfig.getName());
+            return true;
+        } catch (Exception e) {
+            System.err.println("Error saving mob configuration: " + e.getMessage());
+            e.printStackTrace();
+            return false;
+        }
+    }
+
+    /**
+     * Сохраняет конфигурацию дерева поведения
+     */
+    public boolean saveBehaviorTree(BehaviorTreeConfig treeConfig) {
+        try {
+            // 1. Сохраняем локальную копию для кэширования
+            saveLocalBehaviorTreeCopy(treeConfig);
+
+            // 2. Конвертируем в BehaviorTree для отправки на сервер
+            BehaviorTree behaviorTree = convertToBehaviorTree(treeConfig);
+
+            // 3. Отправляем пакет на сервер
+            NetworkManager.INSTANCE.sendToServer(new SaveBehaviorTreePacket(behaviorTree));
+
+            System.out.println("Sent behavior tree to server: " + treeConfig.getName());
+            return true;
+        } catch (Exception e) {
+            System.err.println("Error saving behavior tree: " + e.getMessage());
+            e.printStackTrace();
+            return false;
+        }
+    }
+
+    /**
+     * Конвертирует MobConfig в MobData для отправки на сервер
+     */
+    private MobData convertToMobData(MobConfig config) {
+        MobData data = new MobData(config.getId().toString(), config.getName());
+        data.setModelPath(config.getModelPath());
+        data.setTexturePath(config.getTexturePath());
+        data.setAnimationFilePath(config.getAnimationFilePath());
+
+        // Конвертация атрибутов
+        Map<String, Float> attributes = new HashMap<>();
+        for (Map.Entry<String, Double> entry : config.getAttributes().entrySet()) {
+            attributes.put(entry.getKey(), entry.getValue().floatValue());
+        }
+        data.setAttributes(attributes);
+
+        // Конвертация анимаций
+        Map<String, AnimationConfig> clientAnimations = config.getAnimationMappings();
+        if (clientAnimations != null) {
+            for (Map.Entry<String, AnimationConfig> entry : clientAnimations.entrySet()) {
+                AnimationConfig clientConfig = entry.getValue();
+                data.addAnimation(
+                        entry.getKey(),
+                        clientConfig.getAnimationName(),
+                        clientConfig.isLoop(),
+                        clientConfig.getSpeed()
+                );
+            }
+        }
+
+        // Если у моба есть дерево поведения, привязываем его ID
+        if (config.getBehaviorTreeId() != null) {
+            // Создаем пустое дерево поведения с таким же ID
+            BehaviorTree tree = new BehaviorTree();
+            tree.setId(config.getBehaviorTreeId().toString());
+            tree.setName(config.getName() + "_behavior");
+            data.setBehaviorTree(tree);
+        }
+
+        return data;
+    }
+
+    /**
+     * Конвертирует BehaviorTreeConfig в BehaviorTree для отправки на сервер
+     */
+    private BehaviorTree convertToBehaviorTree(BehaviorTreeConfig config) {
+        BehaviorTree tree = new BehaviorTree();
+        tree.setId(config.getId().toString());
+        tree.setName(config.getName());
+
+        // Устанавливаем ID связанного моба, если есть
+        if (config.getMobId() != null) {
+            // В BehaviorTree пока нет прямого поля для mobId,
+            // поэтому можем использовать имя для хранения информации о мобе
+            tree.setName(config.getName() + " (Mob: " + config.getMobName() + ")");
+        }
+
+        // Конвертация узлов
+        List<BehaviorNode> nodes = new ArrayList<>();
+        for (NodeData nodeData : config.getNodes()) {
+            BehaviorNode node = new BehaviorNode(
+                    nodeData.getType(),
+                    nodeData.getDescription()
+            );
+
+            // Устанавливаем ID узла, если есть
+            if (nodeData.getId() != null) {
+                node.setId(nodeData.getId());
+            }
+
+            node.setParameter(nodeData.getParameter());
+            node.setX(nodeData.getX());
+            node.setY(nodeData.getY());
+            node.setExpanded(nodeData.isExpanded());
+
+            // Копируем параметры анимации
+            if (nodeData.getAnimationId() != null && !nodeData.getAnimationId().isEmpty()) {
+                node.setAnimationId(nodeData.getAnimationId());
+                node.setAnimationSpeed(nodeData.getAnimationSpeed());
+                node.setLoopAnimation(nodeData.isLoopAnimation());
+            }
+
+            // Добавляем пользовательские параметры, если есть
+            if (nodeData.getParameter() != null && !nodeData.getParameter().isEmpty()) {
+                String[] params = nodeData.getParameter().split(";");
+                for (String param : params) {
+                    if (param.contains("=")) {
+                        String[] keyValue = param.split("=", 2);
+                        if (keyValue.length == 2) {
+                            node.setCustomParameter(keyValue[0], keyValue[1]);
+                        }
+                    }
+                }
+            }
+
+            nodes.add(node);
+        }
+        tree.setNodes(nodes);
+
+        // Конвертация соединений
+        List<BehaviorConnection> connections = new ArrayList<>();
+        for (ConnectionData connData : config.getConnections()) {
+            BehaviorConnection conn = new BehaviorConnection(
+                    connData.getSourceNodeId(),
+                    connData.getTargetNodeId()
+            );
+
+            connections.add(conn);
+        }
+        tree.setConnections(connections);
+
+        return tree;
+    }
+
+    /**
+     * Сохраняет локальную копию конфигурации моба для кэширования
+     */
+    private void saveLocalMobCopy(MobConfig mobConfig) {
         try {
             // Создание директории для конкретного моба
             String mobDirName = mobConfig.getName().toLowerCase().replace(" ", "_");
@@ -87,55 +241,7 @@ public class MobSaveService {
 
             // 6. Дерево поведения (в самом конце)
             if (mobConfig.getBehaviorTreeId() != null) {
-                // Находим дерево поведения по ID
-                BehaviorTreeConfig treeConfig = loadBehaviorTreeById(mobConfig.getBehaviorTreeId());
-
-                if (treeConfig != null) {
-                    // Создаем объект дерева поведения
-                    JSONObject behaviorTree = new JSONObject();
-                    behaviorTree.put("id", treeConfig.getId().toString());
-                    behaviorTree.put("name", treeConfig.getName());
-
-                    // Узлы дерева
-                    JSONArray nodesArray = new JSONArray();
-                    for (NodeData node : treeConfig.getNodes()) {
-                        JSONObject nodeObj = new JSONObject();
-                        nodeObj.put("id", node.getId());
-                        nodeObj.put("type", node.getType());
-                        nodeObj.put("description", node.getDescription());
-
-                        if (node.getParameter() != null && !node.getParameter().isEmpty()) {
-                            nodeObj.put("parameter", node.getParameter());
-                        }
-
-                        nodeObj.put("x", node.getX());
-                        nodeObj.put("y", node.getY());
-                        nodeObj.put("isExpanded", node.isExpanded());
-
-                        // Добавляем информацию об анимации, если она есть
-                        if (node.getAnimationId() != null && !node.getAnimationId().isEmpty()) {
-                            nodeObj.put("animationId", node.getAnimationId());
-                            nodeObj.put("animationSpeed", node.getAnimationSpeed());
-                            nodeObj.put("loopAnimation", node.isLoopAnimation());
-                        }
-
-                        nodesArray.put(nodeObj);
-                    }
-                    behaviorTree.put("nodes", nodesArray);
-
-                    // Соединения между узлами
-                    JSONArray connectionsArray = new JSONArray();
-                    for (ConnectionData connection : treeConfig.getConnections()) {
-                        JSONObject connObj = new JSONObject();
-                        connObj.put("source", connection.getSourceNodeId());
-                        connObj.put("target", connection.getTargetNodeId());
-                        connectionsArray.put(connObj);
-                    }
-                    behaviorTree.put("connections", connectionsArray);
-
-                    // Добавляем дерево поведения в конец
-                    orderedData.put("behaviorTree", behaviorTree);
-                }
+                orderedData.put("behaviorTreeId", mobConfig.getBehaviorTreeId().toString());
             }
 
             // Создаем JSON объект из упорядоченной карты
@@ -147,431 +253,20 @@ public class MobSaveService {
                 writer.write(jsonMob.toString(2));
             }
 
-            System.out.println("Mob configuration saved to: " + mobFilePath);
-            return true;
+            System.out.println("Mob configuration cached locally: " + mobFilePath);
         } catch (Exception e) {
-            System.err.println("Error saving mob configuration: " + e.getMessage());
+            System.err.println("Error creating local cache: " + e.getMessage());
             e.printStackTrace();
-            return false;
         }
     }
 
     /**
-     * Загрузить конфигурацию дерева поведения по ID
+     * Сохраняет локальную копию дерева поведения для кэширования
      */
-    private BehaviorTreeConfig loadBehaviorTreeById(UUID treeId) {
-        try {
-            File behaviorsDir = new File(BEHAVIORS_DIRECTORY);
-            if (!behaviorsDir.exists() || !behaviorsDir.isDirectory()) {
-                return null;
-            }
-
-            File[] behaviorFiles = behaviorsDir.listFiles((dir, name) -> name.endsWith(".json"));
-            if (behaviorFiles == null) {
-                return null;
-            }
-
-            for (File file : behaviorFiles) {
-                try {
-                    String content = new String(Files.readAllBytes(file.toPath()));
-                    JSONObject json = new JSONObject(content);
-
-                    if (json.has("id") && json.getString("id").equals(treeId.toString())) {
-                        // Нашли нужное дерево, загружаем его
-                        BehaviorTreeConfig config = new BehaviorTreeConfig();
-                        config.setId(UUID.fromString(json.getString("id")));
-
-                        if (json.has("name")) {
-                            config.setName(json.getString("name"));
-                        }
-
-                        if (json.has("mobId")) {
-                            config.setMobId(UUID.fromString(json.getString("mobId")));
-                        }
-
-                        if (json.has("mobName")) {
-                            config.setMobName(json.getString("mobName"));
-                        }
-
-                        // Загружаем узлы
-                        List<NodeData> nodes = new ArrayList<>();
-                        if (json.has("nodes")) {
-                            JSONArray nodesArray = json.getJSONArray("nodes");
-                            for (int i = 0; i < nodesArray.length(); i++) {
-                                JSONObject nodeObj = nodesArray.getJSONObject(i);
-                                NodeData node = new NodeData();
-                                node.setId(nodeObj.getString("id"));
-                                node.setType(nodeObj.getString("type"));
-                                node.setDescription(nodeObj.getString("description"));
-
-                                if (nodeObj.has("parameter")) {
-                                    node.setParameter(nodeObj.getString("parameter"));
-                                }
-
-                                node.setX(nodeObj.getDouble("x"));
-                                node.setY(nodeObj.getDouble("y"));
-                                node.setExpanded(nodeObj.getBoolean("isExpanded"));
-
-                                // Загружаем параметры анимации, если они есть
-                                if (nodeObj.has("animationId")) {
-                                    node.setAnimationId(nodeObj.getString("animationId"));
-                                    node.setAnimationSpeed(nodeObj.getDouble("animationSpeed"));
-                                    node.setLoopAnimation(nodeObj.getBoolean("loopAnimation"));
-                                }
-
-                                nodes.add(node);
-                            }
-                        }
-                        config.setNodes(nodes);
-
-                        // Загружаем соединения
-                        List<ConnectionData> connections = new ArrayList<>();
-                        if (json.has("connections")) {
-                            JSONArray connectionsArray = json.getJSONArray("connections");
-                            for (int i = 0; i < connectionsArray.length(); i++) {
-                                JSONObject connObj = connectionsArray.getJSONObject(i);
-                                ConnectionData connection = new ConnectionData();
-                                connection.setSourceNodeId(connObj.getString("source"));
-                                connection.setTargetNodeId(connObj.getString("target"));
-                                connections.add(connection);
-                            }
-                        }
-                        config.setConnections(connections);
-
-                        return config;
-                    }
-                } catch (Exception e) {
-                    // Пропускаем файл при ошибке чтения
-                    System.err.println("Error reading behavior tree file " + file.getName() + ": " + e.getMessage());
-                }
-            }
-        } catch (Exception e) {
-            System.err.println("Error searching for behavior tree: " + e.getMessage());
-        }
-
-        return null;
-    }
-
-    /**
-     * Загрузить конфигурацию моба вместе с деревом поведения
-     */
-    public MobConfig loadMobWithBehaviorTree(String mobId) {
-        try {
-            // Конвертируем ID в имя файла
-            String fileName = mobId.replace(" ", "_").toLowerCase() + ".json";
-            String mobDirPath = MOBS_DIRECTORY + mobId.replace(" ", "_").toLowerCase() + "/";
-            String filePath = mobDirPath + fileName;
-
-            // Проверяем существование файла
-            if (!Files.exists(Paths.get(filePath))) {
-                // Пробуем старый формат
-                filePath = MOBS_DIRECTORY + fileName;
-                if (!Files.exists(Paths.get(filePath))) {
-                    return null;
-                }
-            }
-
-            // Читаем JSON файл
-            String jsonContent = new String(Files.readAllBytes(Paths.get(filePath)));
-            JSONObject jsonMob = new JSONObject(jsonContent);
-
-            // Создаем объект конфигурации
-            MobConfig mobConfig = new MobConfig();
-            mobConfig.setId(UUID.fromString(jsonMob.getString("id")));
-            mobConfig.setName(jsonMob.getString("name"));
-            mobConfig.setModelPath(jsonMob.getString("model"));
-            mobConfig.setTexturePath(jsonMob.getString("texture"));
-
-            // Загружаем путь к файлу анимации
-            if (jsonMob.has("animationFile")) {
-                mobConfig.setAnimationFilePath(jsonMob.getString("animationFile"));
-            }
-
-            // Загружаем атрибуты
-            JSONObject attributes = jsonMob.getJSONObject("attributes");
-            for (String key : attributes.keySet()) {
-                mobConfig.getAttributes().put(key, attributes.getDouble(key));
-            }
-
-            // Загружаем настройки спавна
-            if (jsonMob.has("spawnSettings")) {
-                JSONObject spawnSettings = jsonMob.getJSONObject("spawnSettings");
-                mobConfig.setCanSpawnDay(spawnSettings.getBoolean("canSpawnDay"));
-                mobConfig.setCanSpawnNight(spawnSettings.getBoolean("canSpawnNight"));
-
-                JSONArray biomes = spawnSettings.getJSONArray("biomes");
-                List<String> spawnBiomes = new ArrayList<>();
-                for (int i = 0; i < biomes.length(); i++) {
-                    spawnBiomes.add(biomes.getString(i));
-                }
-                mobConfig.setSpawnBiomes(spawnBiomes);
-            }
-
-            // Загружаем анимации
-            if (jsonMob.has("animations")) {
-                JSONArray animations = jsonMob.getJSONArray("animations");
-                Map<String, AnimationConfig> animationMappings = new HashMap<>();
-
-                for (int i = 0; i < animations.length(); i++) {
-                    JSONObject animation = animations.getJSONObject(i);
-                    String action = animation.getString("action");
-                    String animationName = animation.getString("animation");
-                    boolean loop = animation.getBoolean("loop");
-                    float speed = (float) animation.getDouble("speed");
-
-                    AnimationConfig config = new AnimationConfig(
-                            animationName, loop, speed);
-
-                    if (animation.has("description")) {
-                        config.setDescription(animation.getString("description"));
-                    }
-
-                    animationMappings.put(action, config);
-                }
-
-                mobConfig.setAnimationMappings(animationMappings);
-            }
-
-            // Загружаем информацию о дереве поведения
-            if (jsonMob.has("behaviorTree")) {
-                JSONObject behaviorTree = jsonMob.getJSONObject("behaviorTree");
-                UUID behaviorTreeId = UUID.fromString(behaviorTree.getString("id"));
-                mobConfig.setBehaviorTreeId(behaviorTreeId);
-
-                // Здесь можно дополнительно загрузить дерево поведения если нужно
-            } else if (jsonMob.has("behaviorTreeId")) {
-                mobConfig.setBehaviorTreeId(UUID.fromString(jsonMob.getString("behaviorTreeId")));
-            }
-
-            return mobConfig;
-        } catch (Exception e) {
-            System.err.println("Error loading mob configuration: " + e.getMessage());
-            e.printStackTrace();
-            return null;
-        }
-    }
-
-    // Вспомогательный метод для поиска дерева поведения по id моба
-    private BehaviorTreeConfig findBehaviorTreeByMobId(UUID mobId) {
-        try {
-            File behaviorsDir = new File(BEHAVIORS_DIRECTORY);
-
-            if (!behaviorsDir.exists() || !behaviorsDir.isDirectory()) {
-                return null;
-            }
-
-            File[] behaviorFiles = behaviorsDir.listFiles((dir, name) -> name.endsWith(".json"));
-            if (behaviorFiles == null) {
-                return null;
-            }
-
-            for (File file : behaviorFiles) {
-                try {
-                    String content = new String(Files.readAllBytes(file.toPath()));
-                    JSONObject json = new JSONObject(content);
-
-                    if (json.has("mobId") && json.getString("mobId").equals(mobId.toString())) {
-                        return loadBehaviorTree(file.getName().replace(".json", ""));
-                    }
-                } catch (Exception e) {
-                    // Пропускаем файл при ошибке чтения
-                    continue;
-                }
-            }
-        } catch (Exception e) {
-            System.err.println("Error finding behavior tree for mob: " + e.getMessage());
-        }
-
-        return null;
-    }
-
-    // Выделяем копирование дерева поведения в отдельный метод для лучшей организации
-    private void copyBehaviorTreeToMobDirectory(MobConfig mobConfig, String mobDirPath) {
-        if (mobConfig.getBehaviorTreeId() == null) {
-            return;
-        }
-
-        try {
-            // Находим файл дерева поведения в общей директории
-            String treePath = BEHAVIORS_DIRECTORY + mobConfig.getName().toLowerCase().replace(" ", "_") + "_behavior.json";
-            File treeFile = new File(treePath);
-
-            if (treeFile.exists()) {
-                // Читаем содержимое
-                String treeContent = new String(Files.readAllBytes(treeFile.toPath()));
-
-                // Сохраняем копию в директорию моба с именем, соответствующим имени моба
-                String mobTreePath = mobDirPath + mobConfig.getName().toLowerCase().replace(" ", "_") + "_behavior.json";
-                Files.write(Paths.get(mobTreePath), treeContent.getBytes());
-
-                System.out.println("Behavior tree copied to mob directory: " + mobTreePath);
-            }
-        } catch (Exception e) {
-            System.err.println("Failed to copy behavior tree to mob directory: " + e.getMessage());
-        }
-    }
-
-    /**
-     * Загрузить конфигурацию моба
-     */
-    /**
-     * Загрузить конфигурацию моба
-     */
-    public MobConfig loadMob(String mobId) {
-        try {
-            // Конвертируем ID в имя файла
-            String fileName = mobId.replace(" ", "_").toLowerCase() + ".json";
-            String mobDirPath = MOBS_DIRECTORY + mobId.replace(" ", "_").toLowerCase() + "/";
-            String filePath = mobDirPath + fileName;
-
-            // Проверяем существование файла
-            if (!Files.exists(Paths.get(filePath))) {
-                // Пробуем старый формат
-                filePath = MOBS_DIRECTORY + fileName;
-                if (!Files.exists(Paths.get(filePath))) {
-                    return null;
-                }
-            }
-
-            // Читаем JSON файл
-            String jsonContent = new String(Files.readAllBytes(Paths.get(filePath)));
-            JSONObject jsonMob = new JSONObject(jsonContent);
-
-            // Создаем объект конфигурации
-            MobConfig mobConfig = new MobConfig();
-            mobConfig.setId(UUID.fromString(jsonMob.getString("id")));
-            mobConfig.setName(jsonMob.getString("name"));
-            mobConfig.setModelPath(jsonMob.getString("model"));
-            mobConfig.setTexturePath(jsonMob.getString("texture"));
-
-            // Загружаем путь к файлу анимации
-            if (jsonMob.has("animationFile")) {
-                mobConfig.setAnimationFilePath(jsonMob.getString("animationFile"));
-            }
-
-            // Загружаем атрибуты
-            JSONObject attributes = jsonMob.getJSONObject("attributes");
-            for (String key : attributes.keySet()) {
-                mobConfig.getAttributes().put(key, attributes.getDouble(key));
-            }
-
-            // Загружаем анимации
-            if (jsonMob.has("animations")) {
-                JSONArray animations = jsonMob.getJSONArray("animations");
-                Map<String, AnimationConfig> animationMappings = new HashMap<>();
-
-                for (int i = 0; i < animations.length(); i++) {
-                    JSONObject animation = animations.getJSONObject(i);
-                    String action = animation.getString("action");
-                    String animationName = animation.getString("animation");
-                    boolean loop = animation.getBoolean("loop");
-                    float speed = (float) animation.getDouble("speed");
-
-                    AnimationConfig config = new AnimationConfig(
-                            animationName, loop, speed);
-
-                    if (animation.has("description")) {
-                        config.setDescription(animation.getString("description"));
-                    }
-
-                    animationMappings.put(action, config);
-                }
-
-                mobConfig.setAnimationMappings(animationMappings);
-            }
-
-            // Загружаем информацию о дереве поведения
-            if (jsonMob.has("behaviorTree")) {
-                JSONObject behaviorTree = jsonMob.getJSONObject("behaviorTree");
-                UUID behaviorTreeId = UUID.fromString(behaviorTree.getString("id"));
-                mobConfig.setBehaviorTreeId(behaviorTreeId);
-            } else if (jsonMob.has("behaviorTreeId")) {
-                // Для обратной совместимости со старым форматом
-                mobConfig.setBehaviorTreeId(UUID.fromString(jsonMob.getString("behaviorTreeId")));
-            }
-
-            return mobConfig;
-        } catch (Exception e) {
-            System.err.println("Error loading mob configuration: " + e.getMessage());
-            e.printStackTrace();
-            return null;
-        }
-    }
-
-    /**
-     * Получить список всех сохраненных мобов
-     */
-    public List<MobConfig> getAllMobs() {
-        try {
-            createDirectories();
-
-            List<MobConfig> mobs = new ArrayList<>();
-            File mobsDir = new File(MOBS_DIRECTORY);
-
-            if (mobsDir.exists() && mobsDir.isDirectory()) {
-                File[] mobFiles = mobsDir.listFiles((dir, name) -> name.endsWith(".json"));
-
-                if (mobFiles != null) {
-                    for (File file : mobFiles) {
-                        try {
-                            // Извлекаем ID из имени файла
-                            String mobId = file.getName().replace(".json", "");
-                            MobConfig mobConfig = loadMob(mobId);
-
-                            if (mobConfig != null) {
-                                mobs.add(mobConfig);
-                            }
-                        } catch (Exception e) {
-                            System.err.println("Error loading mob file " + file.getName() + ": " + e.getMessage());
-                        }
-                    }
-                }
-            }
-
-            return mobs;
-        } catch (Exception e) {
-            System.err.println("Error getting all mobs: " + e.getMessage());
-            return new ArrayList<>();
-        }
-    }
-
-    /**
-     * Удалить конфигурацию моба
-     */
-    public boolean deleteMob(UUID mobId) {
-        try {
-            List<MobConfig> mobs = getAllMobs();
-
-            for (MobConfig mob : mobs) {
-                if (mob.getId().equals(mobId)) {
-                    String fileName = mob.getName().toLowerCase().replace(" ", "_") + ".json";
-                    String filePath = MOBS_DIRECTORY + fileName;
-
-                    Files.deleteIfExists(Paths.get(filePath));
-                    return true;
-                }
-            }
-
-            return false;
-        } catch (Exception e) {
-            System.err.println("Error deleting mob: " + e.getMessage());
-            return false;
-        }
-    }
-
-    /**
-     * Создать необходимые директории
-     */
-    private void createDirectories() throws IOException {
-        Files.createDirectories(Paths.get(MOBS_DIRECTORY));
-        Files.createDirectories(Paths.get(BEHAVIORS_DIRECTORY));
-    }
-
-    // В методе saveBehaviorTree(BehaviorTreeConfig treeConfig)
-    public boolean saveBehaviorTree(BehaviorTreeConfig treeConfig) {
+    private void saveLocalBehaviorTreeCopy(BehaviorTreeConfig treeConfig) {
         try {
             // Создаем директорию, если она не существует
-            createDirectories();
+            Files.createDirectories(Paths.get(BEHAVIORS_DIRECTORY));
 
             // Создаем JSON объект с данными дерева поведения
             JSONObject jsonTree = new JSONObject();
@@ -638,87 +333,139 @@ public class MobSaveService {
                 writer.write(jsonTree.toString(2)); // Красивый вывод с отступами
             }
 
-            System.out.println("Behavior tree saved to: " + filePath);
-            return true;
+            System.out.println("Behavior tree cached locally: " + filePath);
         } catch (Exception e) {
-            System.err.println("Error saving behavior tree: " + e.getMessage());
+            System.err.println("Error saving local behavior tree: " + e.getMessage());
             e.printStackTrace();
-            return false;
         }
     }
 
-    // В методе loadBehaviorTree(String treeId)
-    public BehaviorTreeConfig loadBehaviorTree(String treeId) {
+    /**
+     * Получить список всех сохраненных мобов
+     */
+    public List<MobConfig> getAllMobs() {
+        try {
+            createDirectories();
+
+            List<MobConfig> mobs = new ArrayList<>();
+            File mobsDir = new File(MOBS_DIRECTORY);
+
+            if (mobsDir.exists() && mobsDir.isDirectory()) {
+                File[] mobFiles = mobsDir.listFiles((dir, name) -> name.endsWith(".json"));
+
+                if (mobFiles != null) {
+                    for (File file : mobFiles) {
+                        try {
+                            // Извлекаем ID из имени файла
+                            String mobId = file.getName().replace(".json", "");
+                            MobConfig mobConfig = loadMob(mobId);
+
+                            if (mobConfig != null) {
+                                mobs.add(mobConfig);
+                            }
+                        } catch (Exception e) {
+                            System.err.println("Error loading mob file " + file.getName() + ": " + e.getMessage());
+                        }
+                    }
+                }
+            }
+
+            return mobs;
+        } catch (Exception e) {
+            System.err.println("Error getting all mobs: " + e.getMessage());
+            return new ArrayList<>();
+        }
+    }
+
+    /**
+     * Загрузить конфигурацию моба
+     */
+    public MobConfig loadMob(String mobId) {
         try {
             // Конвертируем ID в имя файла
-            String fileName = treeId.replace(" ", "_").toLowerCase() + ".json";
-            String filePath = BEHAVIORS_DIRECTORY + fileName;
+            String fileName = mobId.replace(" ", "_").toLowerCase() + ".json";
+            String mobDirPath = MOBS_DIRECTORY + mobId.replace(" ", "_").toLowerCase() + "/";
+            String filePath = mobDirPath + fileName;
 
             // Проверяем существование файла
             if (!Files.exists(Paths.get(filePath))) {
-                return null;
+                // Пробуем старый формат
+                filePath = MOBS_DIRECTORY + fileName;
+                if (!Files.exists(Paths.get(filePath))) {
+                    return null;
+                }
             }
 
             // Читаем JSON файл
-            String jsonContent = new String(Files.readAllBytes(Paths.get(filePath)));
-            JSONObject jsonTree = new JSONObject(jsonContent);
+            String jsonContent = new String(Files.readAllBytes(Paths.get(filePath)), StandardCharsets.UTF_8);
+            JSONObject jsonMob = new JSONObject(jsonContent);
 
-            // Создаем объект конфигурации дерева
-            BehaviorTreeConfig treeConfig = new BehaviorTreeConfig();
-            treeConfig.setId(UUID.fromString(jsonTree.getString("id")));
-            treeConfig.setName(jsonTree.getString("name"));
+            // Создаем объект конфигурации
+            MobConfig mobConfig = new MobConfig();
+            mobConfig.setId(UUID.fromString(jsonMob.getString("id")));
+            mobConfig.setName(jsonMob.getString("name"));
+            mobConfig.setModelPath(jsonMob.getString("model"));
+            mobConfig.setTexturePath(jsonMob.getString("texture"));
 
-            // Загружаем узлы
-            List<NodeData> nodes = new ArrayList<>();
-            JSONArray nodesArray = jsonTree.getJSONArray("nodes");
+            // Загружаем путь к файлу анимации
+            if (jsonMob.has("animationFile")) {
+                mobConfig.setAnimationFilePath(jsonMob.getString("animationFile"));
+            }
 
-            for (int i = 0; i < nodesArray.length(); i++) {
-                JSONObject jsonNode = nodesArray.getJSONObject(i);
+            // Загружаем атрибуты
+            JSONObject attributes = jsonMob.getJSONObject("attributes");
+            for (String key : attributes.keySet()) {
+                mobConfig.getAttributes().put(key, attributes.getDouble(key));
+            }
 
-                NodeData node = new NodeData();
-                node.setId(jsonNode.getString("id"));
-                node.setType(jsonNode.getString("type"));
-                node.setX(jsonNode.getDouble("x"));
-                node.setY(jsonNode.getDouble("y"));
-                node.setDescription(jsonNode.getString("description"));
+            // Загружаем анимации
+            if (jsonMob.has("animations")) {
+                JSONArray animations = jsonMob.getJSONArray("animations");
+                Map<String, AnimationConfig> animationMappings = new HashMap<>();
 
-                if (jsonNode.has("parameter")) {
-                    node.setParameter(jsonNode.getString("parameter"));
+                for (int i = 0; i < animations.length(); i++) {
+                    JSONObject animation = animations.getJSONObject(i);
+                    String action = animation.getString("action");
+                    String animationName = animation.getString("animation");
+                    boolean loop = animation.getBoolean("loop");
+                    float speed = (float) animation.getDouble("speed");
+
+                    AnimationConfig config = new AnimationConfig(
+                            animationName, loop, speed);
+
+                    if (animation.has("description")) {
+                        config.setDescription(animation.getString("description"));
+                    }
+
+                    animationMappings.put(action, config);
                 }
 
-                node.setExpanded(jsonNode.getBoolean("isExpanded"));
-
-                // Загружаем параметры анимации, если они есть
-                if (jsonNode.has("animationId")) {
-                    node.setAnimationId(jsonNode.getString("animationId"));
-                    node.setAnimationSpeed(jsonNode.getDouble("animationSpeed"));
-                    node.setLoopAnimation(jsonNode.getBoolean("loopAnimation"));
-                }
-
-                nodes.add(node);
+                mobConfig.setAnimationMappings(animationMappings);
             }
-            treeConfig.setNodes(nodes);
 
-            // Загружаем соединения
-            List<ConnectionData> connections = new ArrayList<>();
-            JSONArray connectionsArray = jsonTree.getJSONArray("connections");
-
-            for (int i = 0; i < connectionsArray.length(); i++) {
-                JSONObject jsonConnection = connectionsArray.getJSONObject(i);
-
-                ConnectionData connection = new ConnectionData();
-                connection.setSourceNodeId(jsonConnection.getString("source"));
-                connection.setTargetNodeId(jsonConnection.getString("target"));
-
-                connections.add(connection);
+            // Загружаем информацию о дереве поведения
+            if (jsonMob.has("behaviorTree")) {
+                JSONObject behaviorTree = jsonMob.getJSONObject("behaviorTree");
+                UUID behaviorTreeId = UUID.fromString(behaviorTree.getString("id"));
+                mobConfig.setBehaviorTreeId(behaviorTreeId);
+            } else if (jsonMob.has("behaviorTreeId")) {
+                // Для обратной совместимости со старым форматом
+                mobConfig.setBehaviorTreeId(UUID.fromString(jsonMob.getString("behaviorTreeId")));
             }
-            treeConfig.setConnections(connections);
 
-            return treeConfig;
+            return mobConfig;
         } catch (Exception e) {
-            System.err.println("Error loading behavior tree: " + e.getMessage());
+            System.err.println("Error loading mob configuration: " + e.getMessage());
             e.printStackTrace();
             return null;
         }
+    }
+
+    /**
+     * Создать необходимые директории
+     */
+    private void createDirectories() throws IOException {
+        Files.createDirectories(Paths.get(MOBS_DIRECTORY));
+        Files.createDirectories(Paths.get(BEHAVIORS_DIRECTORY));
     }
 }
