@@ -98,12 +98,20 @@ public class ServerSaveHandler {
             // Создаем файл с именем, основанным на ID дерева
             Path filePath = behaviorDir.resolve(tree.getId() + ".json");
 
+            // Проверяем, есть ли все необходимые поля
+            if (tree.getNodes() == null || tree.getNodes().isEmpty()) {
+                System.err.println("Warning: Saving empty behavior tree without nodes!");
+            }
+
             // Сериализуем дерево в JSON и сохраняем
             String json = GSON.toJson(tree);
             Files.write(filePath, json.getBytes(StandardCharsets.UTF_8));
 
-            // ДОБАВЛЕНО: Подробное логирование о сохранении файла
-            System.out.println("Behavior tree saved to file: " + filePath.toString() + " (Size: " + json.length() + " bytes)");
+            // Подробное логирование о сохранении файла
+            System.out.println("Behavior tree saved to file: " + filePath.toString() +
+                    " (Size: " + json.length() + " bytes)" +
+                    " (Nodes: " + (tree.getNodes() != null ? tree.getNodes().size() : 0) + ")" +
+                    " (Connections: " + (tree.getConnections() != null ? tree.getConnections().size() : 0) + ")");
         } catch (Exception e) {
             System.err.println("Error saving behavior tree file: " + e.getMessage());
             e.printStackTrace();

@@ -1,5 +1,7 @@
 package com.custommobsforge.custommobsforge.client.gui;
 
+import com.custommobsforge.custommobsforge.common.network.NetworkManager;
+import com.custommobsforge.custommobsforge.common.network.packet.RequestMobListPacket;
 import javafx.application.Application;
 import javafx.application.Platform;
 import javafx.geometry.Insets;
@@ -384,10 +386,13 @@ public class MobCreatorGUI extends Application {
             return;
         }
 
-        // В реальном приложении здесь открывался бы диалог выбора моба
+        // Запрашиваем свежий список мобов с сервера
+        NetworkManager.INSTANCE.sendToServer(new RequestMobListPacket());
+
+        // Используем имеющиеся данные из кэша
         List<MobConfig> mobs = mobSaveService.getAllMobs();
         if (mobs.isEmpty()) {
-            GUIUtils.showAlert("Info", "No saved mobs found");
+            GUIUtils.showAlert("Info", "No saved mobs found. Please wait a moment while mobs are being loaded from the server.");
             return;
         }
 
@@ -450,6 +455,10 @@ public class MobCreatorGUI extends Application {
         behaviorTreeEditor.clearAll(); // Предполагается, что такой метод существует
 
         updateTitle();
+    }
+
+    public MobSaveService getMobSaveService() {
+        return mobSaveService;
     }
 
     private void exportMob() {

@@ -10,10 +10,14 @@ public class PlayAnimationNodeExecutor implements NodeExecutor {
         String animationId = node.getAnimationId();
         if (animationId == null || animationId.isEmpty()) {
             animationId = node.getCustomParameterAsString("animation", "");
+            System.out.println("PlayAnimationNodeExecutor: Getting animation from parameter: " + animationId);
+        } else {
+            System.out.println("PlayAnimationNodeExecutor: Using animation from node.animationId: " + animationId);
         }
 
         // Если нет анимации, возвращаем неудачу
         if (animationId.isEmpty()) {
+            System.out.println("PlayAnimationNodeExecutor: No animation ID found for node " + node.getId());
             return false;
         }
 
@@ -28,8 +32,12 @@ public class PlayAnimationNodeExecutor implements NodeExecutor {
             speed = (float) node.getCustomParameterAsDouble("speed", 1.0);
         }
 
-        // Воспроизводим анимацию
-        entity.setAnimation(animationId, loop, speed);
+        // Воспроизводим анимацию НАПРЯМУЮ, без маппинга
+        System.out.println("PlayAnimationNodeExecutor: Directly playing animation '" + animationId +
+                "' for entity " + entity.getId() +
+                " (loop: " + loop + ", speed: " + speed + ")");
+
+        entity.playAnimationDirect(animationId, loop, speed);
 
         return true;
     }

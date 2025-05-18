@@ -55,6 +55,11 @@ public class NetworkManager {
                 PlayBehaviorNodePacket::decode,
                 PlayBehaviorNodePacket::handle);
 
+        INSTANCE.registerMessage(nextId(), RequestMobListPacket.class,
+                RequestMobListPacket::encode,
+                RequestMobListPacket::decode,
+                RequestMobListPacket::handle);
+
         // ИЗМЕНЕНИЕ #2: Зарегистрировать новые пакеты
         INSTANCE.registerMessage(nextId(), SaveMobDataPacket.class,
                 SaveMobDataPacket::encode,

@@ -26,13 +26,26 @@ public class BehaviorTreeExecutor extends Goal {
         this.entity = entity;
         this.tree = tree;
 
+        System.out.println("BehaviorTreeExecutor: Created for entity " + entity.getId() +
+                " with tree ID: " + (tree != null ? tree.getId() : "null"));
+
+        if (tree == null) {
+            System.out.println("BehaviorTreeExecutor: WARNING - Tree is null!");
+        } else if (tree.getNodes() == null || tree.getNodes().isEmpty()) {
+            System.out.println("BehaviorTreeExecutor: WARNING - Tree has no nodes!");
+        }
+
         // Регистрируем все обработчики узлов
         initializeNodeExecutors();
 
         // Определяем корневой узел
-        BehaviorNode rootNode = tree.getRootNode();
+        BehaviorNode rootNode = tree != null ? tree.getRootNode() : null;
         if (rootNode != null) {
             currentRootNodeId = rootNode.getId();
+            System.out.println("BehaviorTreeExecutor: Root node set to " + rootNode.getId() +
+                    " of type " + rootNode.getType());
+        } else {
+            System.out.println("BehaviorTreeExecutor: WARNING - No root node found!");
         }
     }
 
@@ -83,10 +96,36 @@ public class BehaviorTreeExecutor extends Goal {
 
     @Override
     public void tick() {
+        // Отладочный вывод при первом тике
+        if (executionTicks == 0) {
+            System.out.println("BehaviorTreeExecutor: First tick for entity " + entity.getId() +
+                    ", root node: " + currentRootNodeId);
+
+            // Выводим все узлы дерева для отладки
+            if (tree != null && tree.getNodes() != null) {
+                System.out.println("Tree nodes (" + tree.getNodes().size() + "):");
+                for (BehaviorNode node : tree.getNodes()) {
+                    System.out.println("  - " + node.getId() + " (" + node.getType() + "): " + node.getDescription());
+                }
+            } else {
+                System.out.println("Tree or nodes is null!");
+            }
+
+            // Выводим все соединения
+            if (tree != null && tree.getConnections() != null) {
+                System.out.println("Tree connections (" + tree.getConnections().size() + "):");
+                for (BehaviorConnection conn : tree.getConnections()) {
+                    System.out.println("  - " + conn.getSourceNodeId() + " -> " + conn.getTargetNodeId());
+                }
+            }
+        }
+
         executionTicks++;
 
         // Обновляем дерево с заданным интервалом
         if (executionTicks % executionInterval == 0) {
+            System.out.println("BehaviorTreeExecutor: Executing tree for entity " + entity.getId() +
+                    " at tick " + executionTicks);
             executeTree();
         }
     }
@@ -94,14 +133,20 @@ public class BehaviorTreeExecutor extends Goal {
     // Метод выполнения дерева поведения
     private void executeTree() {
         if (tree == null || currentRootNodeId == null) {
+            System.out.println("BehaviorTreeExecutor: Cannot execute tree - " +
+                    (tree == null ? "tree is null" : "root node ID is null"));
             return;
         }
 
         // Получаем корневой узел
         BehaviorNode rootNode = tree.getNode(currentRootNodeId);
         if (rootNode == null) {
+            System.out.println("BehaviorTreeExecutor: Root node with ID " + currentRootNodeId + " not found in tree!");
             return;
         }
+
+        System.out.println("BehaviorTreeExecutor: Executing root node " + rootNode.getId() +
+                " of type " + rootNode.getType());
 
         // Выполняем корневой узел
         executeNode(rootNode);
@@ -110,6 +155,7 @@ public class BehaviorTreeExecutor extends Goal {
     // Рекурсивное выполнение узла и его потомков
     public boolean executeNode(BehaviorNode node) {
         if (node == null) {
+            System.out.println("BehaviorTreeExecutor: Node is null, cannot execute");
             return false;
         }
 
@@ -118,8 +164,14 @@ public class BehaviorTreeExecutor extends Goal {
 
         // Если нет обработчика для этого типа узла, прерываем
         if (executor == null) {
+            System.out.println("BehaviorTreeExecutor: No executor found for node type: " + nodeType);
+            System.out.println("Available node types: " + String.join(", ", nodeExecutors.keySet()));
             return false;
         }
+
+        System.out.println("BehaviorTreeExecutor: Executing node " + node.getId() +
+                " of type " + node.getType() +
+                " with description: " + node.getDescription());
 
         // Отправляем пакет о выполнении узла клиентам
         if (entity.level() instanceof ServerLevel) {
@@ -130,7 +182,10 @@ public class BehaviorTreeExecutor extends Goal {
         }
 
         // Выполняем узел с помощью соответствующего обработчика
-        return executor.execute(entity, node, this);
+        boolean result = executor.execute(entity, node, this);
+        System.out.println("BehaviorTreeExecutor: Node " + node.getId() + " execution result: " + result);
+
+        return result;
     }
 
     // Вспомогательные методы для обработчиков узлов

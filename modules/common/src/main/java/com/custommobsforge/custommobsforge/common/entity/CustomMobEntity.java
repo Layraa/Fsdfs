@@ -157,9 +157,7 @@ public class CustomMobEntity extends PathfinderMob implements GeoEntity {
                 System.out.println("CustomMobEntity: Playing animation " + animationId +
                         " for entity " + this.getId() + " (loop: " + loop + ", speed: " + speed + ")");
 
-                // Здесь мы НЕ изменяем ID анимации, а используем его как есть из конфигурации
-                // Это обеспечивает полную гибкость и совместимость с любыми названиями анимаций
-
+                // Здесь устанавливается анимация из маппинга
                 this.currentAnimation = animationId;
                 this.isLoopingAnimation = loop;
                 this.animationSpeed = speed;
@@ -192,9 +190,51 @@ public class CustomMobEntity extends PathfinderMob implements GeoEntity {
         }
     }
 
+    /**
+     * Прямое воспроизведение анимации по имени, без использования маппинга
+     */
+    public void playAnimationDirect(String animationName, boolean loop, float speed) {
+        System.out.println("CustomMobEntity: Directly playing animation '" + animationName +
+                "' for entity " + this.getId() + " (loop: " + loop + ", speed: " + speed + ")");
+
+        this.currentAnimation = animationName;
+        this.isLoopingAnimation = loop;
+        this.animationSpeed = speed;
+
+        // Обновляем время последней анимации
+        this.lastAnimationTime = System.currentTimeMillis();
+
+        // Синхронизируем с клиентами
+        if (!this.level().isClientSide) {
+            NetworkManager.INSTANCE.send(
+                    PacketDistributor.TRACKING_ENTITY.with(() -> this),
+                    new AnimationSyncPacket(this.getId(), animationName, speed, loop)
+            );
+        }
+    }
+
     public void setAnimation(String animationId, boolean loop, float speed) {
         System.out.println("CustomMobEntity: Setting animation " + animationId +
                 " for entity " + this.getId() + " (loop: " + loop + ", speed: " + speed + ")");
+
+        // Проверяем, есть ли анимация в списке анимаций моба
+        if (mobData != null && mobData.getAnimations() != null) {
+            boolean found = false;
+            for (Map.Entry<String, AnimationMapping> entry : mobData.getAnimations().entrySet()) {
+                if (entry.getValue().getAnimationName().equals(animationId)) {
+                    found = true;
+                    break;
+                }
+            }
+
+            if (!found) {
+                System.out.println("CustomMobEntity: WARNING - Animation '" + animationId +
+                        "' not found in mob data animations! Available animations:");
+                for (Map.Entry<String, AnimationMapping> entry : mobData.getAnimations().entrySet()) {
+                    System.out.println("  " + entry.getKey() + " -> " + entry.getValue().getAnimationName());
+                }
+            }
+        }
 
         // Используем ID анимации как есть, без модификаций
         this.currentAnimation = animationId;
