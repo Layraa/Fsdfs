@@ -1,7 +1,10 @@
 package com.custommobsforge.custommobsforge.common.entity;
 
+import com.custommobsforge.custommobsforge.common.animations.AnimationAdapter;
+import com.custommobsforge.custommobsforge.common.animations.AnimationAdapterImpl;
 import com.custommobsforge.custommobsforge.common.data.MobData;
 import com.custommobsforge.custommobsforge.common.data.AnimationMapping;
+import com.custommobsforge.custommobsforge.common.fsm.StateManager;
 import com.custommobsforge.custommobsforge.common.network.NetworkManager;
 import com.custommobsforge.custommobsforge.common.network.packet.AnimationSyncPacket;
 import com.custommobsforge.custommobsforge.common.network.packet.MobDataPacket;
@@ -47,37 +50,50 @@ public class CustomMobEntity extends PathfinderMob implements GeoEntity {
 
     private MobData mobData;
     private final AnimatableInstanceCache cache = AzureLibUtil.createInstanceCache(this);
-    private String currentAnimation = "";
-    private boolean isLoopingAnimation = true;
-    private float animationSpeed = 1.0f;
+    public String currentAnimation = "";
+    public boolean looping = true;
+    public float animationSpeed = 1.0f;
 
-    // Поле для отслеживания времени запуска анимаций
+    // Добавляем AnimationAdapter
+    private AnimationAdapter animationAdapter;
+
+    // Добавляем StateManager
+    private StateManager stateManager;
+
+    // Остальные поля без изменений
     private final Map<String, Long> animationStartTimes = new ConcurrentHashMap<>();
-
-    // Карта для хранения коллбэков для анимаций
     private final Map<String, Consumer<String>> animationCallbacks = new ConcurrentHashMap<>();
-
-    // Поля для управления автоматическими анимациями
     private String lastPlayedAnimation = "";
     private long lastAnimationTime = 0;
-    private static final long ANIMATION_COOLDOWN = 500; // 0.5 секунды в миллисекундах
-
-    // Флаг для отслеживания, был ли моб только что создан
+    private static final long ANIMATION_COOLDOWN = 500;
     private boolean isNewlySpawned = true;
-
-    // Набор приоритетных анимаций, которые не должны прерываться
     private static final Set<String> PRIORITY_ANIMATIONS = new HashSet<>(Arrays.asList(
             "ATTACK", "HURT", "DEATH", "SPECIAL_1", "SPECIAL_2"));
-
-    // Флаг для отключения автоматических анимаций
     private boolean disableAutoAnimations = false;
+    private int executionTicks = 0;
 
     public CustomMobEntity(EntityType<? extends PathfinderMob> entityType, Level level) {
         super(entityType, level);
-        System.out.println("CustomMobEntity: Created new entity instance");
+        LOGGER.info("CustomMobEntity: Created new entity instance");
+
+        // Инициализируем адаптер анимаций
+        this.animationAdapter = new AnimationAdapterImpl(this);
+
+        // Инициализируем менеджер состояний
+        this.stateManager = new StateManager(this);
     }
 
-    // Статический строитель атрибутов
+    // Добавляем геттер для AnimationAdapter
+    public AnimationAdapter getAnimationAdapter() {
+        return animationAdapter;
+    }
+
+    // Добавляем геттер для StateManager
+    public StateManager getStateManager() {
+        return stateManager;
+    }
+
+    // Стандартные методы
     public static AttributeSupplier.Builder createAttributes() {
         return PathfinderMob.createMobAttributes()
                 .add(Attributes.MAX_HEALTH, 20.0D)
@@ -103,7 +119,7 @@ public class CustomMobEntity extends PathfinderMob implements GeoEntity {
 
     public void setMobId(String mobId) {
         this.entityData.set(MOB_ID, mobId);
-        System.out.println("CustomMobEntity: Set mob ID to " + mobId + " for entity " + this.getId());
+        LOGGER.info("CustomMobEntity: Set mob ID to {} for entity {}", mobId, this.getId());
     }
 
     public String getMobId() {
@@ -116,10 +132,11 @@ public class CustomMobEntity extends PathfinderMob implements GeoEntity {
 
     public void setMobData(MobData mobData) {
         this.mobData = mobData;
-        System.out.println("CustomMobEntity: Set mob data for entity " + this.getId() +
-                " with ID " + (mobData != null ? mobData.getId() : "null") +
-                ", model: " + (mobData != null ? mobData.getModelPath() : "null") +
-                ", texture: " + (mobData != null ? mobData.getTexturePath() : "null"));
+        LOGGER.info("CustomMobEntity: Set mob data for entity {} with ID {}, model: {}, texture: {}",
+                this.getId(),
+                (mobData != null ? mobData.getId() : "null"),
+                (mobData != null ? mobData.getModelPath() : "null"),
+                (mobData != null ? mobData.getTexturePath() : "null"));
 
         if (mobData != null && mobData.getAttributes() != null) {
             if (mobData.getAttributes().containsKey("maxHealth")) {
@@ -148,12 +165,12 @@ public class CustomMobEntity extends PathfinderMob implements GeoEntity {
                     PacketDistributor.TRACKING_ENTITY.with(() -> this),
                     new MobDataPacket(this.mobData)
             );
-            System.out.println("CustomMobEntity: Synced mob data for " + this.getMobId() + " to tracking clients");
+            LOGGER.info("CustomMobEntity: Synced mob data for {} to tracking clients", this.getMobId());
         }
     }
 
     /**
-     * Проигрывает анимацию по действию
+     * Проигрывает анимацию по действию - этот метод переведен на использование AnimationAdapter
      */
     public void playAnimation(String action) {
         if (mobData != null && mobData.getAnimations() != null) {
@@ -167,23 +184,11 @@ public class CustomMobEntity extends PathfinderMob implements GeoEntity {
                 LOGGER.info("CustomMobEntity: Playing animation {} for entity {} (loop: {}, speed: {})",
                         animationId, this.getId(), loop, speed);
 
-                this.currentAnimation = animationId;
-                this.isLoopingAnimation = loop;
-                this.animationSpeed = speed;
+                // Используем AnimationAdapter вместо прямого управления
+                this.animationAdapter.playAnimation(animationId, loop, speed);
 
                 this.lastPlayedAnimation = action;
                 this.lastAnimationTime = System.currentTimeMillis();
-
-                animationStartTimes.put(animationId, System.currentTimeMillis());
-
-                EventSystem.fireEvent(new AnimationStartedEvent(animationId, this));
-
-                if (!this.level().isClientSide) {
-                    NetworkManager.INSTANCE.send(
-                            PacketDistributor.TRACKING_ENTITY.with(() -> this),
-                            new AnimationSyncPacket(this.getId(), animationId, speed, loop)
-                    );
-                }
             } else {
                 LOGGER.warn("CustomMobEntity: No animation mapping found for action {} in entity {}",
                         action, this.getId());
@@ -201,7 +206,7 @@ public class CustomMobEntity extends PathfinderMob implements GeoEntity {
     }
 
     /**
-     * Прямое воспроизведение анимации по имени, без использования маппинга
+     * Прямое воспроизведение анимации по имени - этот метод сохраняем для совместимости
      */
     public void playAnimationDirect(String animationName, boolean loop, float speed) {
         LOGGER.info("CustomMobEntity: Directly playing animation '{}' for entity {} (loop: {}, speed: {})",
@@ -223,7 +228,7 @@ public class CustomMobEntity extends PathfinderMob implements GeoEntity {
 
         // Проверяем, можно ли прерывать текущую анимацию
         if (!this.currentAnimation.isEmpty() && !this.currentAnimation.equals(animationName)) {
-            if (!isLoopingAnimation && System.currentTimeMillis() - lastAnimationTime < 1000) {
+            if (!looping && System.currentTimeMillis() - lastAnimationTime < 1000) {
                 LOGGER.info("CustomMobEntity: Checking if can interrupt current animation '{}'", currentAnimation);
 
                 // Проверяем, является ли текущая анимация приоритетной
@@ -260,13 +265,13 @@ public class CustomMobEntity extends PathfinderMob implements GeoEntity {
                 LOGGER.info("CustomMobEntity: Resetting previous animation '{}' before playing new one",
                         this.currentAnimation);
 
-                if (!isLoopingAnimation) {
+                if (!looping) {
                     EventSystem.fireEvent(new AnimationCompletedEvent(this.currentAnimation, this));
                 }
             }
 
             this.currentAnimation = animationName;
-            this.isLoopingAnimation = loop;
+            this.looping = loop;
             this.animationSpeed = speed;
 
             this.lastAnimationTime = System.currentTimeMillis();
@@ -312,13 +317,8 @@ public class CustomMobEntity extends PathfinderMob implements GeoEntity {
         }
     }
 
-    // Добавьте этот метод в класс CustomMobEntity
-
-    /**
-     * Переходит к анимации IDLE, если не воспроизводится приоритетная анимация
-     */
     public void transitionToIdleAnimation() {
-        if (currentAnimation.isEmpty() || isLoopingAnimation) {
+        if (currentAnimation.isEmpty() || looping) {
             if (!lastPlayedAnimation.equals("IDLE")) {
                 LOGGER.info("CustomMobEntity: Transitioning to IDLE animation for entity {}", this.getId());
                 this.playAnimation("IDLE");
@@ -363,9 +363,10 @@ public class CustomMobEntity extends PathfinderMob implements GeoEntity {
     }
 
     public void setAnimation(String animationId, boolean loop, float speed) {
-        System.out.println("CustomMobEntity: Setting animation " + animationId +
-                " for entity " + this.getId() + " (loop: " + loop + ", speed: " + speed + ")");
+        LOGGER.info("CustomMobEntity: Setting animation {} for entity {} (loop: {}, speed: {})",
+                animationId, this.getId(), loop, speed);
 
+        // Проверка доступности анимации в данных моба
         if (mobData != null && mobData.getAnimations() != null) {
             boolean found = false;
             for (Map.Entry<String, AnimationMapping> entry : mobData.getAnimations().entrySet()) {
@@ -376,20 +377,18 @@ public class CustomMobEntity extends PathfinderMob implements GeoEntity {
             }
 
             if (!found) {
-                System.out.println("CustomMobEntity: WARNING - Animation '" + animationId +
-                        "' not found in mob data animations! Available animations:");
+                LOGGER.warn("CustomMobEntity: WARNING - Animation '{}' not found in mob data animations! Available animations:", animationId);
                 for (Map.Entry<String, AnimationMapping> entry : mobData.getAnimations().entrySet()) {
-                    System.out.println("  " + entry.getKey() + " -> " + entry.getValue().getAnimationName());
+                    LOGGER.warn("  {} -> {}", entry.getKey(), entry.getValue().getAnimationName());
                 }
             }
         }
 
         this.currentAnimation = animationId;
-        this.isLoopingAnimation = loop;
+        this.looping = loop;
         this.animationSpeed = speed;
 
         animationStartTimes.put(animationId, System.currentTimeMillis());
-
         this.lastAnimationTime = System.currentTimeMillis();
     }
 
@@ -402,15 +401,15 @@ public class CustomMobEntity extends PathfinderMob implements GeoEntity {
 
             if (executionTicks % 100 == 0) {
                 LOGGER.debug("CustomMobEntity: Animation controller processing animation: {} (loop: {}) for entity {}",
-                        currentAnimation, isLoopingAnimation, this.getId());
+                        currentAnimation, looping, this.getId());
             }
 
-            Animation.LoopType loopType = isLoopingAnimation ? Animation.LoopType.LOOP : Animation.LoopType.PLAY_ONCE;
+            Animation.LoopType loopType = looping ? Animation.LoopType.LOOP : Animation.LoopType.PLAY_ONCE;
 
             try {
                 RawAnimation animation = RawAnimation.begin().then(currentAnimation, loopType);
 
-                if (!isLoopingAnimation) {
+                if (!looping) {
                     if (event.getController().hasAnimationFinished()) {
                         LOGGER.info("CustomMobEntity: Animation controller reports animation '{}' finished for entity {}",
                                 currentAnimation, this.getId());
@@ -441,7 +440,7 @@ public class CustomMobEntity extends PathfinderMob implements GeoEntity {
         super.addAdditionalSaveData(compound);
         String mobId = this.getMobId();
         compound.putString("MobId", mobId);
-        System.out.println("CustomMobEntity: Saving mob ID " + mobId + " to NBT for entity " + this.getId());
+        LOGGER.info("CustomMobEntity: Saving mob ID {} to NBT for entity {}", mobId, this.getId());
     }
 
     @Override
@@ -449,16 +448,12 @@ public class CustomMobEntity extends PathfinderMob implements GeoEntity {
         super.readAdditionalSaveData(compound);
         String mobId = compound.getString("MobId");
         this.setMobId(mobId);
-        System.out.println("CustomMobEntity: Loaded mob ID " + mobId + " from NBT for entity " + this.getId());
+        LOGGER.info("CustomMobEntity: Loaded mob ID {} from NBT for entity {}", mobId, this.getId());
     }
-
-    private int executionTicks = 0;
-
-    // Добавьте следующие методы в класс CustomMobEntity
 
     private void updateAnimations() {
         // Обновляем статус незацикленных анимаций
-        if (!this.currentAnimation.isEmpty() && !this.isLoopingAnimation) {
+        if (!this.currentAnimation.isEmpty() && !this.looping) {
             long startTime = getAnimationStartTime(this.currentAnimation);
             long currentTime = System.currentTimeMillis();
             long duration = estimateAnimationDuration(this.currentAnimation);
@@ -500,12 +495,18 @@ public class CustomMobEntity extends PathfinderMob implements GeoEntity {
         }
     }
 
-    /**
-     * Обновленный метод tick() с вызовом updateAnimations()
-     */
+    // Модифицированный метод tick для обновления StateManager
     @Override
     public void tick() {
         super.tick();
+
+        // Обновляем адаптер анимаций
+        animationAdapter.update();
+
+        // Обновляем менеджер состояний
+        stateManager.update();
+
+        // Оригинальный код метода tick
         executionTicks++;
 
         // Загрузка данных моба при необходимости
@@ -530,7 +531,6 @@ public class CustomMobEntity extends PathfinderMob implements GeoEntity {
             LOGGER.info("CustomMobEntity: Entity " + this.getId() + " is newly spawned, playing SPAWN animation");
             this.playAnimation("SPAWN");
             isNewlySpawned = false;
-            // Устанавливаем флаг блокировки автоматических анимаций на короткое время
             this.disableAutoAnimations = true;
             return;
         }
@@ -574,7 +574,7 @@ public class CustomMobEntity extends PathfinderMob implements GeoEntity {
     private void updateAnimationStatuses() {
         long currentTime = System.currentTimeMillis();
 
-        if (!isLoopingAnimation && currentAnimation != null && !currentAnimation.isEmpty()) {
+        if (!looping && currentAnimation != null && !currentAnimation.isEmpty()) {
             long startTime = animationStartTimes.getOrDefault(currentAnimation, 0L);
             if (startTime > 0) {
                 long duration = estimateAnimationDuration(currentAnimation);
@@ -652,7 +652,7 @@ public class CustomMobEntity extends PathfinderMob implements GeoEntity {
     @Override
     public boolean hurt(DamageSource source, float amount) {
         if (super.hurt(source, amount)) {
-            System.out.println("CustomMobEntity: Entity " + this.getId() + " hurt, playing HURT animation");
+            LOGGER.info("CustomMobEntity: Entity " + this.getId() + " hurt, playing HURT animation");
             this.playAnimation("HURT");
             return true;
         }
@@ -661,7 +661,7 @@ public class CustomMobEntity extends PathfinderMob implements GeoEntity {
 
     @Override
     public void die(DamageSource source) {
-        System.out.println("CustomMobEntity: Entity " + this.getId() + " died, playing DEATH animation");
+        LOGGER.info("CustomMobEntity: Entity " + this.getId() + " died, playing DEATH animation");
         this.playAnimation("DEATH");
         super.die(source);
     }

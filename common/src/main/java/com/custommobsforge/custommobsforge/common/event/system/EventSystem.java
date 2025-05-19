@@ -3,6 +3,7 @@ package com.custommobsforge.custommobsforge.common.event.system;
 import java.util.List;
 import java.util.Map;
 import java.util.Collections;
+import java.util.UUID;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.CopyOnWriteArrayList;
 import org.apache.logging.log4j.LogManager;
@@ -18,9 +19,35 @@ public class EventSystem {
     /**
      * Регистрирует слушателя для определенного типа события
      */
+    /**
+     * Регистрирует слушателя для определенного типа события с ID
+     */
+    public static <T extends Event> void registerListener(Class<T> eventType, EventListener<T> listener, String listenerId) {
+        // Оборачиваем слушателя в IdentifiableListener, если он им еще не является
+        EventListener<T> identifiableListener = listener;
+        if (!(listener instanceof IdentifiableListener)) {
+            identifiableListener = new IdentifiableListener<T>() {
+                @Override
+                public String getId() {
+                    return listenerId;
+                }
+
+                @Override
+                public void onEvent(T event) {
+                    listener.onEvent(event);
+                }
+            };
+        }
+
+        listeners.computeIfAbsent(eventType, k -> new CopyOnWriteArrayList<>()).add(identifiableListener);
+        LOGGER.debug("Registered listener with ID {} for event type: {}", listenerId, eventType.getSimpleName());
+    }
+
+    /**
+     * Регистрирует слушателя для определенного типа события без ID
+     */
     public static <T extends Event> void registerListener(Class<T> eventType, EventListener<T> listener) {
-        listeners.computeIfAbsent(eventType, k -> new CopyOnWriteArrayList<>()).add(listener);
-        LOGGER.debug("Registered listener for event type: {}", eventType.getSimpleName());
+        registerListener(eventType, listener, UUID.randomUUID().toString());
     }
 
     /**
@@ -67,5 +94,18 @@ public class EventSystem {
     public static void clearAllListeners() {
         listeners.clear();
         LOGGER.debug("Cleared all event listeners");
+    }
+
+    public static void unregisterListenerById(String listenerId) {
+        for (List<EventListener<?>> listenerList : listeners.values()) {
+            // Предполагаем, что EventListener имплементирует интерфейс с методом getId()
+            listenerList.removeIf(listener -> {
+                if (listener instanceof IdentifiableListener) {
+                    return ((IdentifiableListener<?>) listener).getId().equals(listenerId);
+                }
+                return false;
+            });
+        }
+        LOGGER.debug("Unregistered listener with ID: {}", listenerId);
     }
 }

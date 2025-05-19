@@ -191,8 +191,6 @@ public class MobSpawnEventHandler {
             LOGGER.info("!!! MobSpawnEventHandler: Playing SPAWN animation for entity {}", entity.getId());
             entity.playAnimation("SPAWN");
 
-            // Регистрируем моб в службе очистки
-            EntityCleanupService.registerEntity(entity);
         }
     }
 
@@ -316,8 +314,6 @@ public class MobSpawnEventHandler {
             // Воспроизводим анимацию смерти
             entity.playAnimation("DEATH");
 
-            // Очищаем ресурсы для этого моба
-            EntityCleanupService.cleanup(entity.getId());
         }
     }
 }

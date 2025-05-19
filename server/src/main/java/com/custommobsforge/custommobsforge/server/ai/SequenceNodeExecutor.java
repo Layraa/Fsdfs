@@ -1,5 +1,6 @@
 package com.custommobsforge.custommobsforge.server.ai;
 
+import com.custommobsforge.custommobsforge.common.ai.NodeStatus;
 import com.custommobsforge.custommobsforge.common.data.BehaviorNode;
 import com.custommobsforge.custommobsforge.common.entity.CustomMobEntity;
 
@@ -33,6 +34,9 @@ public class SequenceNodeExecutor implements NodeExecutor {
         if (children.isEmpty()) {
             LOGGER.info("SequenceNode: Node {} has no children, returning success", node.getId());
             executor.logNodeExecution("SequenceNode", node.getId(), "no children, returning success", false);
+
+            // Отмечаем последовательность как успешно завершенную
+            executor.completeNode(node, true);
             return true;
         }
 
@@ -46,38 +50,50 @@ public class SequenceNodeExecutor implements NodeExecutor {
                     i+1, children.size(), child.getId(), child.getType());
         }
 
-        // Проверяем состояние детей
-        boolean allChildrenCompleted = true;
-        boolean anyChildFailed = false;
+        // Получаем текущий индекс выполнения последовательности
+        int currentIndex = executor.getBlackboard().getValue(node.getId() + ":currentIndex", 0);
 
-        for (BehaviorNode child : children) {
-            NodeStatus childStatus = executor.getNodeStatus(child);
-
-            if (childStatus == NodeStatus.FAILURE) {
-                anyChildFailed = true;
-                break;
-            } else if (childStatus != NodeStatus.SUCCESS) {
-                allChildrenCompleted = false;
-            }
-        }
-
-        if (anyChildFailed) {
-            // Если какой-то из детей уже завершился с ошибкой, вся последовательность завершается с ошибкой
-            executor.logNodeExecution("SequenceNode", node.getId(),
-                    "sequence failed because a child failed", false);
-            return false;
-        }
-
-        if (allChildrenCompleted) {
-            // Если все дети уже успешно выполнены, последовательность успешна
+        // Если все дочерние узлы уже выполнены, возвращаем успех
+        if (currentIndex >= children.size()) {
+            LOGGER.info("SequenceNode: All {} children completed successfully", children.size());
+            executor.completeNode(node, true);
             executor.logNodeExecution("SequenceNode", node.getId(),
                     "all children already completed successfully", false);
             return true;
         }
 
+        // Получаем текущий узел для выполнения
+        BehaviorNode currentChild = children.get(currentIndex);
+
+        // Проверяем статус текущего узла
+        NodeStatus childStatus = executor.getNodeStatus(currentChild);
+
+        LOGGER.info("SequenceNode: Executing child {}/{}: {} of type {} (current status: {})",
+                currentIndex+1, children.size(), currentChild.getId(), currentChild.getType(), childStatus);
+
+        // Если узел уже успешно выполнен, переходим к следующему
+        if (childStatus == NodeStatus.SUCCESS) {
+            LOGGER.info("SequenceNode: Child {} already completed successfully, moving to next", currentChild.getId());
+
+            // Увеличиваем индекс и продолжаем выполнение последовательности
+            executor.getBlackboard().setValue(node.getId() + ":currentIndex", currentIndex + 1);
+
+            // Рекурсивно вызываем себя, чтобы перейти к следующему узлу
+            return execute(entity, node, executor);
+        }
+        // Если узел завершился неудачно, вся последовательность завершается неудачно
+        else if (childStatus == NodeStatus.FAILURE) {
+            LOGGER.info("SequenceNode: Child {} failed, sequence fails", currentChild.getId());
+            executor.completeNode(node, false);
+            return false;
+        }
+
+        // Если узел еще не выполнялся или в процессе выполнения, запускаем его
+        LOGGER.info("SequenceNode: Executing child node {}", currentChild.getId());
+
         // В BehaviorTreeExecutor теперь есть механизм для обработки последовательностей
         executor.logNodeExecution("SequenceNode", node.getId(),
-                "registered " + children.size() + " children for sequential execution", false);
+                "registered for sequential execution", false);
 
         // Возвращаем успех, чтобы BehaviorTreeExecutor знал, что нужно начать выполнение последовательности
         return true;

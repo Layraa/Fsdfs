@@ -1,5 +1,6 @@
 package com.custommobsforge.custommobsforge.server.ai;
 
+import com.custommobsforge.custommobsforge.common.ai.NodeStatus;
 import com.custommobsforge.custommobsforge.common.data.BehaviorNode;
 
 /**

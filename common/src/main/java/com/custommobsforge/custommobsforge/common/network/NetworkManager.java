@@ -9,7 +9,6 @@ import net.minecraftforge.network.simple.SimpleChannel;
 public class NetworkManager {
     private static final String PROTOCOL_VERSION = "1";
 
-    // ИЗМЕНЕНИЕ #1: Исправить ResourceLocation, чтобы использовать правильный MOD_ID
     public static final ResourceLocation CHANNEL_NAME =
             new ResourceLocation(CommonCustomMobsForge.MOD_ID, "main_channel");
 
@@ -60,7 +59,7 @@ public class NetworkManager {
                 RequestMobListPacket::decode,
                 RequestMobListPacket::handle);
 
-        // ИЗМЕНЕНИЕ #2: Зарегистрировать новые пакеты
+        // Зарегистрировать новые пакеты
         INSTANCE.registerMessage(nextId(), SaveMobDataPacket.class,
                 SaveMobDataPacket::encode,
                 SaveMobDataPacket::decode,
@@ -70,5 +69,11 @@ public class NetworkManager {
                 SaveBehaviorTreePacket::encode,
                 SaveBehaviorTreePacket::decode,
                 SaveBehaviorTreePacket::handle);
+
+        // Новый пакет для синхронизации состояний
+        INSTANCE.registerMessage(nextId(), StateUpdatePacket.class,
+                StateUpdatePacket::encode,
+                StateUpdatePacket::decode,
+                StateUpdatePacket::handle);
     }
 }

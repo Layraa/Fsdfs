@@ -11,51 +11,11 @@ import net.minecraft.world.phys.Vec3;
 import org.apache.logging.log4j.LogManager;
 import org.apache.logging.log4j.Logger;
 
-import java.util.HashMap;
 import java.util.List;
-import java.util.Map;
-import java.util.UUID;
-import java.util.concurrent.ConcurrentHashMap;
 
 public class FollowNodeExecutor implements NodeExecutor {
     private static final Logger LOGGER = LogManager.getLogger("CustomMobsForge");
     private static final TargetingConditions FOLLOW_TARGETING = TargetingConditions.forNonCombat().range(32.0D);
-
-    // Кэш состояний для каждого моба
-    private static final Map<Integer, FollowState> mobStates = new ConcurrentHashMap<>();
-
-    // Состояние для отслеживания прогресса выполнения узла
-    private static class FollowState {
-        public LivingEntity target; // Текущая цель
-        public Vec3 lastPosition = Vec3.ZERO; // Последняя позиция моба
-        public long lastPositionUpdateTime = 0; // Время последнего обновления позиции
-        public long movementStartTime = 0; // Время начала движения
-        public long estimatedDuration = 0; // Оценочная продолжительность движения
-        public boolean isWalking = false; // Флаг того, что моб сейчас идёт
-        public boolean wasAtDesiredDistance = false; // Флаг того, что моб уже был на нужном расстоянии
-        public int stuckCounter = 0; // Счётчик "застреваний"
-        public String animationState = "NONE"; // Текущее состояние анимации
-        public double targetDistance = 0; // Целевое расстояние
-        public int completionCount = 0; // Счётчик успешных завершений (для защиты от бесконечного цикла)
-
-        // Конструктор
-        public FollowState() {
-            reset();
-        }
-
-        // Сброс состояния
-        public void reset() {
-            target = null;
-            lastPosition = Vec3.ZERO;
-            lastPositionUpdateTime = 0;
-            movementStartTime = 0;
-            estimatedDuration = 0;
-            isWalking = false;
-            wasAtDesiredDistance = false;
-            stuckCounter = 0;
-            animationState = "NONE";
-        }
-    }
 
     @Override
     public boolean execute(CustomMobEntity entity, BehaviorNode node, BehaviorTreeExecutor executor) {
@@ -73,288 +33,154 @@ public class FollowNodeExecutor implements NodeExecutor {
             return false; // На клиенте ничего не делаем
         }
 
-        // Получаем уникальный ID для моба
-        int entityId = entity.getId();
+        // Уникальный идентификатор для узла+сущности
+        String nodeKey = entity.getId() + ":" + node.getId();
 
-        // Получаем или создаём состояние для этого моба
-        FollowState state = mobStates.computeIfAbsent(entityId, id -> new FollowState());
-
-        // Сохраняем целевое расстояние
-        state.targetDistance = targetDistance;
-
-        // Отключаем автоматические анимации, чтобы не было конфликтов
+        // Отключаем автоматические анимации
         entity.setDisableAutoAnimations(true);
 
-        // Текущее время для расчётов
-        long currentTime = System.currentTimeMillis();
-
-        // Если это первый запуск, инициализируем позицию
-        if (state.lastPosition.equals(Vec3.ZERO)) {
-            state.lastPosition = entity.position();
-            state.lastPositionUpdateTime = currentTime;
-        }
-
-        // Проверяем достижение лимита успешных завершений
-        if (state.completionCount >= 5) {
-            LOGGER.info("FollowNode: Entity {} has reached completion limit ({}), finishing node",
-                    entityId, state.completionCount);
-
-            // Восстанавливаем автоматические анимации
-            entity.setDisableAutoAnimations(false);
-
-            // Очищаем состояние
-            state.reset();
-
-            // Сообщаем, что мы закончили
-            executor.setNodeNeedsMoreTime(false);
-            return true;
-        }
-
-        // Проверяем, закончилось ли время движения
-        if (state.isWalking && state.movementStartTime > 0) {
-            if (currentTime - state.movementStartTime > state.estimatedDuration) {
-                LOGGER.info("FollowNode: Entity {} movement time elapsed, checking position", entityId);
-                state.isWalking = false;
-            }
-        }
-
-        // Обновляем информацию о движении
-        if (currentTime - state.lastPositionUpdateTime > 200) { // Каждые 200 мс
-            Vec3 currentPos = entity.position();
-            double distanceMoved = state.lastPosition.distanceTo(currentPos);
-
-            // Проверяем, движется ли моб
-            if (state.isWalking && distanceMoved < 0.05) {
-                state.stuckCounter++;
-                LOGGER.info("FollowNode: Entity {} might be stuck (moved only {} blocks), stuck counter: {}",
-                        entityId, distanceMoved, state.stuckCounter);
-
-                // Если моб застрял несколько раз подряд, пытаемся его освободить
-                if (state.stuckCounter >= 3) {
-                    LOGGER.warn("FollowNode: Entity {} is stuck, trying to free it", entityId);
-
-                    // Останавливаем текущий путь
-                    entity.getNavigation().stop();
-
-                    // Небольшой "прыжок" для преодоления мелких препятствий
-                    entity.setDeltaMovement(entity.getDeltaMovement().add(0, 0.2, 0));
-
-                    // Задержка перед новой попыткой
-                    state.stuckCounter = 0;
-                    state.isWalking = false;
-                }
-            } else {
-                state.stuckCounter = 0;
-            }
-
-            // Обновляем последнюю позицию
-            state.lastPosition = currentPos;
-            state.lastPositionUpdateTime = currentTime;
-        }
-
-        // Поиск или проверка текущей цели
-        LivingEntity target = state.target;
+        // Получаем текущую цель из Blackboard или находим новую
+        LivingEntity target = (LivingEntity) executor.getBlackboard().getValue(nodeKey + ":target");
 
         if (target == null || target.isRemoved() || entity.distanceTo(target) > 32.0) {
             target = findTarget(entity, targetPlayerOnly);
 
             if (target == null) {
+                // Нет цели, возвращаем неудачу и включаем автоанимации обратно
                 executor.logNodeExecution("FollowNode", node.getId(), "no target found", false);
-
-                // Воспроизводим анимацию IDLE, так как нет цели для следования
-                if (!state.animationState.equals("IDLE")) {
-                    executor.playAnimation("IDLE");
-                    state.animationState = "IDLE";
-                }
-
-                // Увеличиваем счётчик завершений
-                state.completionCount++;
-
-                // Если несколько раз подряд нет цели, завершаем узел
-                if (state.completionCount >= 3) {
-                    executor.setNodeNeedsMoreTime(false);
-                    entity.setDisableAutoAnimations(false);
-                    state.reset();
-                    return true;
-                }
-
-                // Продолжаем выполнение узла, но с задержкой
-                executor.setNodeNeedsMoreTime(true);
-                return true;
+                entity.setDisableAutoAnimations(false);
+                return false;
             }
 
-            // Обновляем цель
-            state.target = target;
+            // Сохраняем цель в Blackboard
+            executor.getBlackboard().setValue(nodeKey + ":target", target);
         }
 
-        // Вычисляем расстояние до цели
+        // Текущее время для расчётов
+        long currentTime = System.currentTimeMillis();
+        long lastPathUpdate = executor.getBlackboard().getValue(nodeKey + ":lastPathUpdate", 0L);
+
+        // Обновляем путь с определенным интервалом
+        if (currentTime - lastPathUpdate > 500) {
+            boolean pathUpdated = updatePath(entity, target, targetDistance, speed);
+            executor.getBlackboard().setValue(nodeKey + ":lastPathUpdate", currentTime);
+
+            if (!pathUpdated) {
+                // Не удалось обновить путь, возвращаем неудачу
+                executor.logNodeExecution("FollowNode", node.getId(), "failed to update path", false);
+                entity.setDisableAutoAnimations(false);
+                return false;
+            }
+        }
+
+        // Обновляем анимацию на основе фактического движения
+        updateAnimation(entity);
+
+        // Проверяем, находимся ли мы на нужном расстоянии
         double distanceToTarget = entity.distanceTo(target);
-        LOGGER.info("FollowNode: Entity {} is at distance {} from target, desired distance is {}",
-                entityId, distanceToTarget, targetDistance);
+        boolean atDesiredDistance = Math.abs(distanceToTarget - targetDistance) < 1.0;
 
-        // Если уже находимся на нужном расстоянии (с погрешностью), считаем это успехом
-        if (Math.abs(distanceToTarget - targetDistance) < 1.0) {
-            LOGGER.info("FollowNode: Entity {} is at desired distance", entityId);
+        if (atDesiredDistance) {
+            // Если мы на нужном расстоянии, смотрим на цель и возвращаем успех
+            entity.getLookControl().setLookAt(target, 30.0f, 30.0f);
 
-            // Воспроизводим анимацию ожидания
-            if (!state.animationState.equals("IDLE")) {
-                executor.playAnimation("IDLE");
-                state.animationState = "IDLE";
+            // Воспроизводим IDLE анимацию
+            if (!entity.getAnimationAdapter().isPlaying("IDLE")) {
+                entity.getAnimationAdapter().playAnimation("IDLE", true, 1.0f);
             }
 
-            // Если мы уже были на нужном расстоянии, увеличиваем счётчик завершений
-            if (state.wasAtDesiredDistance) {
-                state.completionCount++;
-
-                // Если мы на нужном расстоянии несколько тиков подряд, считаем узел завершённым
-                if (state.completionCount >= 3) {
-                    LOGGER.info("FollowNode: Entity {} has been at desired distance for {} ticks, completing node",
-                            entityId, state.completionCount);
-
-                    // Восстанавливаем автоматические анимации
-                    entity.setDisableAutoAnimations(false);
-
-                    // Очищаем состояние
-                    state.reset();
-
-                    // Сообщаем, что мы закончили
-                    executor.setNodeNeedsMoreTime(false);
-                    return true;
-                }
-            } else {
-                state.wasAtDesiredDistance = true;
-                state.completionCount = 1;
-            }
-
-            // Продолжаем выполнение узла, но с проверкой в следующем тике
-            executor.setNodeNeedsMoreTime(true);
-            return true;
-        } else {
-            // Сбрасываем флаг, так как мы не на нужном расстоянии
-            state.wasAtDesiredDistance = false;
-            state.completionCount = 0;
-        }
-
-        // Получаем навигацию
-        PathNavigation navigation = entity.getNavigation();
-        if (navigation == null) {
-            LOGGER.error("FollowNode: Entity {} has no navigation!", entityId);
-            executor.logNodeExecution("FollowNode", node.getId(), "no navigation available", false);
-            executor.setNodeNeedsMoreTime(false);
+            executor.logNodeExecution("FollowNode", node.getId(), "reached desired distance", false);
             entity.setDisableAutoAnimations(false);
-            state.reset();
-            return false;
-        }
-
-        // Если моб уже идёт, не пытаемся установить новый путь
-        if (state.isWalking && currentTime - state.movementStartTime < state.estimatedDuration) {
-            // Просто обновляем анимацию ходьбы
-            if (!state.animationState.equals("WALK")) {
-                executor.playAnimation("WALK");
-                state.animationState = "WALK";
-            }
-
-            // Продолжаем смотреть на цель
-            entity.getLookControl().setLookAt(target, 30.0F, 30.0F);
-
-            // Продолжаем выполнение узла
-            executor.setNodeNeedsMoreTime(true);
             return true;
         }
 
-        // Вычисляем направление к цели
+        // Продолжаем следовать, нужно больше времени
+        executor.setNodeNeedsMoreTime(true);
+        return true;
+    }
+
+    /**
+     * Обновляет путь к цели
+     * @param entity Сущность
+     * @param target Цель
+     * @param targetDistance Желаемое расстояние до цели
+     * @param speed Скорость движения
+     * @return true, если удалось обновить путь
+     */
+    private boolean updatePath(CustomMobEntity entity, LivingEntity target, double targetDistance, double speed) {
+        double distanceToTarget = entity.distanceTo(target);
+        PathNavigation navigator = entity.getNavigation();
+
+        // Очищаем текущий путь
+        navigator.stop();
+
+        // Если мы на нужном расстоянии, просто смотрим на цель
+        if (Math.abs(distanceToTarget - targetDistance) < 1.0) {
+            entity.getLookControl().setLookAt(target, 30.0f, 30.0f);
+            return true;
+        }
+
+        // Рассчитываем целевую позицию
         Vec3 targetPos = target.position();
         Vec3 entityPos = entity.position();
         Vec3 direction;
 
-        // Направление движения зависит от текущего расстояния
         if (distanceToTarget < targetDistance) {
-            // Слишком близко, нужно отойти
+            // Отходим
             direction = entityPos.subtract(targetPos).normalize();
-            LOGGER.info("FollowNode: Entity {} is too close, moving away", entityId);
         } else {
-            // Слишком далеко, нужно подойти
+            // Подходим
             direction = targetPos.subtract(entityPos).normalize();
-            LOGGER.info("FollowNode: Entity {} is too far, moving closer", entityId);
         }
 
-        // Вычисляем целевую точку
-        double moveDistance = Math.abs(distanceToTarget - targetDistance);
-        if (moveDistance > 10) moveDistance = 10; // Ограничиваем дистанцию для лучшего контроля
+        double distanceToMove = Math.abs(distanceToTarget - targetDistance);
+        if (distanceToMove > 10) distanceToMove = 10;
 
-        // Останавливаем текущий путь
-        navigation.stop();
+        double targetX = entityPos.x + direction.x * distanceToMove;
+        double targetZ = entityPos.z + direction.z * distanceToMove;
 
-        // Рассчитываем целевую позицию
-        double moveToX, moveToZ;
-        if (distanceToTarget < targetDistance) {
-            // Если мы слишком близко, отходим в противоположном направлении
-            moveToX = entityPos.x + direction.x * moveDistance;
-            moveToZ = entityPos.z + direction.z * moveDistance;
-        } else {
-            // Если мы слишком далеко, используем вектор к цели
-            // и останавливаемся на нужном расстоянии от неё
-            Vec3 dirToTarget = targetPos.subtract(entityPos).normalize();
-            double distanceToMove = distanceToTarget - targetDistance;
-            moveToX = entityPos.x + dirToTarget.x * distanceToMove;
-            moveToZ = entityPos.z + dirToTarget.z * distanceToMove;
+        // Устанавливаем путь
+        boolean success = navigator.moveTo(targetX, entityPos.y, targetZ, speed);
+
+        if (!success) {
+            // Если не удалось установить путь, пробуем прямое перемещение
+            entity.getMoveControl().setWantedPosition(targetX, entityPos.y, targetZ, speed);
+            return true;
         }
 
-        // Используем навигацию для движения
-        boolean pathSuccess = navigation.moveTo(moveToX, entityPos.y, moveToZ, speed);
+        return true;
+    }
 
-        if (pathSuccess) {
-            LOGGER.info("FollowNode: Entity {} is moving to [{}, {}, {}] with speed {}",
-                    entityId, moveToX, entityPos.y, moveToZ, speed);
+    /**
+     * Обновляет анимацию моба в зависимости от движения
+     * @param entity Сущность
+     */
+    private void updateAnimation(CustomMobEntity entity) {
+        // Проверяем, движется ли моб фактически
+        Vec3 velocity = entity.getDeltaMovement();
+        double speed = Math.sqrt(velocity.x * velocity.x + velocity.z * velocity.z);
 
-            // Воспроизводим анимацию ходьбы
-            executor.playAnimation("WALK");
-            state.animationState = "WALK";
-            state.isWalking = true;
-
-            // Включаем "смотреть на цель" даже при движении
-            entity.getLookControl().setLookAt(target, 30.0F, 30.0F);
-
-            // Запоминаем начало движения
-            state.movementStartTime = currentTime;
-
-            // Рассчитываем приблизительную продолжительность движения
-            long estimatedDuration = (long)(moveDistance / speed * 1000);
-            if (estimatedDuration < 500) estimatedDuration = 500;
-            if (estimatedDuration > 5000) estimatedDuration = 5000;
-            state.estimatedDuration = estimatedDuration;
-
-            // Продолжаем выполнение узла
-            executor.setNodeNeedsMoreTime(true);
-            return true;
+        if (speed > 0.01) {
+            // Моб движется, играем анимацию ходьбы
+            if (!entity.getAnimationAdapter().isPlaying("WALK")) {
+                entity.getAnimationAdapter().playAnimation("WALK", true, 1.0f);
+            }
         } else {
-            // Если не удалось построить путь, пробуем прямое движение
-            LOGGER.warn("FollowNode: Entity {} failed to create path, trying direct movement", entityId);
-
-            // Используем прямое перемещение через MoveControl
-            entity.getMoveControl().setWantedPosition(moveToX, entityPos.y, moveToZ, speed);
-
-            // Воспроизводим анимацию ходьбы
-            executor.playAnimation("WALK");
-            state.animationState = "WALK";
-            state.isWalking = true;
-
-            // Смотрим на цель
-            entity.getLookControl().setLookAt(target, 30.0F, 30.0F);
-
-            // Запоминаем начало движения
-            state.movementStartTime = currentTime;
-            state.estimatedDuration = 1000L; // 1 секунда для прямого движения
-
-            // Продолжаем выполнение узла
-            executor.setNodeNeedsMoreTime(true);
-            return true;
+            // Моб стоит, играем анимацию ожидания
+            if (!entity.getAnimationAdapter().isPlaying("IDLE")) {
+                entity.getAnimationAdapter().playAnimation("IDLE", true, 1.0f);
+            }
         }
     }
 
-    // Метод поиска цели
-    private LivingEntity findTarget(CustomMobEntity entity, boolean targetPlayer) {
-        if (targetPlayer) {
+    /**
+     * Находит цель для следования
+     * @param entity Сущность
+     * @param targetPlayerOnly Следовать только за игроком
+     * @return Цель для следования или null, если цель не найдена
+     */
+    private LivingEntity findTarget(CustomMobEntity entity, boolean targetPlayerOnly) {
+        if (targetPlayerOnly) {
             // Ищем ближайшего игрока
             Player nearestPlayer = entity.level().getNearestPlayer(
                     FOLLOW_TARGETING,
@@ -363,7 +189,7 @@ public class FollowNodeExecutor implements NodeExecutor {
 
             return nearestPlayer;
         } else {
-            // Ищем любую живую сущность
+            // Ищем любую подходящую сущность
             List<LivingEntity> nearbyEntities = entity.level().getEntitiesOfClass(
                     LivingEntity.class,
                     entity.getBoundingBox().inflate(16.0),
@@ -376,11 +202,5 @@ public class FollowNodeExecutor implements NodeExecutor {
         }
 
         return null;
-    }
-
-    // Метод для очистки ресурсов при удалении моба
-    public static void cleanup(int entityId) {
-        mobStates.remove(entityId);
-        LOGGER.info("FollowNode: Cleaned up resources for entity {}", entityId);
     }
 }

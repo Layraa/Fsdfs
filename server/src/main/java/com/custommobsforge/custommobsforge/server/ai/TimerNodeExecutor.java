@@ -1,22 +1,15 @@
 package com.custommobsforge.custommobsforge.server.ai;
 
+import com.custommobsforge.custommobsforge.common.ai.NodeStatus;
 import com.custommobsforge.custommobsforge.common.data.BehaviorNode;
 import com.custommobsforge.custommobsforge.common.entity.CustomMobEntity;
 import org.apache.logging.log4j.LogManager;
 import org.apache.logging.log4j.Logger;
 
-import java.util.HashMap;
 import java.util.List;
-import java.util.Map;
-import java.util.concurrent.ConcurrentHashMap;
 
 public class TimerNodeExecutor implements NodeExecutor {
     private static final Logger LOGGER = LogManager.getLogger("CustomMobsForge");
-
-    // Используем ConcurrentHashMap для многопоточной безопасности
-    private static final Map<String, Long> timerStartTimes = new ConcurrentHashMap<>();
-    private static final Map<String, Long> timerDurations = new ConcurrentHashMap<>();
-    private static final Map<String, Boolean> timerCompleted = new ConcurrentHashMap<>();
 
     @Override
     public boolean execute(CustomMobEntity entity, BehaviorNode node, BehaviorTreeExecutor executor) {
@@ -35,10 +28,15 @@ public class TimerNodeExecutor implements NodeExecutor {
         executor.logNodeExecution("TimerNode", node.getId(),
                 "duration=" + duration + ", repeat=" + repeat, true);
 
+        // Проверим status узла
+        NodeStatus currentStatus = executor.getNodeStatus(node);
+        if (currentStatus == NodeStatus.SUCCESS) {
+            LOGGER.info("TimerNodeExecutor: Timer for node {} already completed, returning success", node.getId());
+            return true;
+        }
+
         // Проверим raw параметр для более надежного парсинга
         if (node.getParameter() != null && !node.getParameter().isEmpty()) {
-            LOGGER.info("TimerNodeExecutor: Raw parameter = {}", node.getParameter());
-
             // Тщательное извлечение параметра duration
             try {
                 String param = node.getParameter();
@@ -50,7 +48,6 @@ public class TimerNodeExecutor implements NodeExecutor {
                             value = value.split(";", 2)[0];
                         }
                         double parsedDuration = Double.parseDouble(value);
-                        LOGGER.info("TimerNodeExecutor: Parsed duration = {} from parameter", parsedDuration);
                         duration = parsedDuration;
                     }
                 }
@@ -69,7 +66,6 @@ public class TimerNodeExecutor implements NodeExecutor {
                             value = value.split(";", 2)[0];
                         }
                         boolean parsedRepeat = Boolean.parseBoolean(value);
-                        LOGGER.info("TimerNodeExecutor: Parsed repeat = {} from parameter", parsedRepeat);
                         repeat = parsedRepeat;
                     }
                 }
@@ -81,14 +77,18 @@ public class TimerNodeExecutor implements NodeExecutor {
         // Идентификатор таймера (уникальный для каждого узла и каждой сущности)
         String timerId = entity.getId() + ":" + node.getId();
 
-        // Проверяем, завершился ли таймер ранее
-        if (timerCompleted.getOrDefault(timerId, false) && !repeat) {
+        // Проверяем, завершен ли таймер уже
+        boolean timerCompleted = executor.getBlackboard().getValue(timerId + ":completed", false);
+        if (timerCompleted && !repeat) {
             LOGGER.info("TimerNodeExecutor: Timer for {} already completed, returning success", timerId);
 
             // Сбрасываем статус для следующего запуска
-            timerCompleted.remove(timerId);
+            executor.getBlackboard().removeValue(timerId + ":completed");
+            executor.getBlackboard().removeValue(timerId + ":started");
+            executor.getBlackboard().removeValue(timerId + ":startTime");
+            executor.getBlackboard().removeValue(timerId + ":duration");
 
-            // Сообщаем, что узел завершил выполнение
+            // Отмечаем узел как выполненный
             executor.completeNode(node, true);
             executor.setNodeNeedsMoreTime(false);
 
@@ -99,28 +99,30 @@ public class TimerNodeExecutor implements NodeExecutor {
         long currentTime = System.currentTimeMillis();
 
         // Если таймер не запущен, запускаем его
-        if (!timerStartTimes.containsKey(timerId)) {
+        if (!executor.getBlackboard().getValue(timerId + ":started", false)) {
             LOGGER.info("TimerNodeExecutor: Starting timer for {}", timerId);
-            timerStartTimes.put(timerId, currentTime);
+            executor.getBlackboard().setValue(timerId + ":started", true);
+            executor.getBlackboard().setValue(timerId + ":startTime", currentTime);
 
             // Сохраняем продолжительность в миллисекундах
             long durationMs = Math.max(100, (long) (duration * 1000));
-            timerDurations.put(timerId, durationMs);
+            executor.getBlackboard().setValue(timerId + ":duration", durationMs);
 
             // Сбрасываем статус завершения
-            timerCompleted.remove(timerId);
+            executor.getBlackboard().removeValue(timerId + ":completed");
 
-            // Сообщаем исполнителю, что нужно больше времени
+            // Отмечаем узел как выполняющийся (RUNNING)
             executor.setNodeNeedsMoreTime(true);
 
+            // Логируем запуск таймера
             executor.logNodeExecution("TimerNode", node.getId(),
                     "timer started, will run for " + durationMs + "ms", false);
             return true; // Возвращаем true, чтобы последовательность продолжалась
         }
 
         // Проверяем, истекло ли время
-        long startTime = timerStartTimes.get(timerId);
-        long durationMs = timerDurations.getOrDefault(timerId, Math.max(100, (long)(duration * 1000)));
+        long startTime = executor.getBlackboard().getValue(timerId + ":startTime", 0L);
+        long durationMs = executor.getBlackboard().getValue(timerId + ":duration", Math.max(100, (long)(duration * 1000)));
         long elapsed = currentTime - startTime;
 
         LOGGER.info("TimerNodeExecutor: Checking timer for {}, elapsed {} ms out of {}",
@@ -130,17 +132,18 @@ public class TimerNodeExecutor implements NodeExecutor {
             // Если таймер настроен на повторение, перезапускаем его
             if (repeat) {
                 LOGGER.info("TimerNodeExecutor: Timer expired, restarting (repeat=true)");
-                timerStartTimes.put(timerId, currentTime);
+                executor.getBlackboard().setValue(timerId + ":startTime", currentTime);
                 // Все еще нужно время
                 executor.setNodeNeedsMoreTime(true);
             } else {
                 // Иначе, удаляем таймер
                 LOGGER.info("TimerNodeExecutor: Timer expired, not restarting (repeat=false)");
-                timerStartTimes.remove(timerId);
-                timerDurations.remove(timerId);
+                executor.getBlackboard().removeValue(timerId + ":started");
+                executor.getBlackboard().removeValue(timerId + ":startTime");
+                executor.getBlackboard().removeValue(timerId + ":duration");
 
                 // Отмечаем таймер как завершенный
-                timerCompleted.put(timerId, true);
+                executor.getBlackboard().setValue(timerId + ":completed", true);
 
                 // Больше не нужно времени
                 executor.setNodeNeedsMoreTime(false);
@@ -159,42 +162,38 @@ public class TimerNodeExecutor implements NodeExecutor {
                 }
             }
 
+            // Логируем завершение таймера
             executor.logNodeExecution("TimerNode", node.getId(), "completed", false);
             return true;
-        }
+        } else {
+            // Проверяем, не осталось ли слишком мало времени
+            // Если таймер почти завершен (осталось меньше интервала выполнения), форсируем завершение
+            // Это поможет избежать проблем с застреванием узлов
+            if (durationMs - elapsed < 250) { // если осталось меньше 250мс
+                LOGGER.info("TimerNodeExecutor: Timer almost expired (remaining {}ms), forcing completion", durationMs - elapsed);
 
-        // Таймер еще работает
-        LOGGER.info("TimerNodeExecutor: Timer not yet expired, continuing");
-        executor.setNodeNeedsMoreTime(true);
-        return true; // Важно! Возвращаем true, чтобы последовательность продолжалась
-    }
+                // Имитируем истечение таймера
+                if (repeat) {
+                    LOGGER.info("TimerNodeExecutor: Timer expired, restarting (repeat=true)");
+                    executor.getBlackboard().setValue(timerId + ":startTime", currentTime);
+                    executor.setNodeNeedsMoreTime(true);
+                } else {
+                    LOGGER.info("TimerNodeExecutor: Timer expired, not restarting (repeat=false)");
+                    executor.getBlackboard().removeValue(timerId + ":started");
+                    executor.getBlackboard().removeValue(timerId + ":startTime");
+                    executor.getBlackboard().removeValue(timerId + ":duration");
+                    executor.getBlackboard().setValue(timerId + ":completed", true);
+                    executor.setNodeNeedsMoreTime(false);
+                    executor.completeNode(node, true);
+                }
 
-    /**
-     * Очищает таймеры для указанной сущности
-     */
-    public static void cleanup(int entityId) {
-        // Удаляем все записи для этой сущности
-        String entityPrefix = entityId + ":";
-
-        // Очищаем карты, удаляя записи для этой сущности
-        for (String key : timerStartTimes.keySet().toArray(new String[0])) {
-            if (key.startsWith(entityPrefix)) {
-                timerStartTimes.remove(key);
+                return true;
             }
-        }
 
-        for (String key : timerDurations.keySet().toArray(new String[0])) {
-            if (key.startsWith(entityPrefix)) {
-                timerDurations.remove(key);
-            }
+            // Таймер еще работает
+            LOGGER.info("TimerNodeExecutor: Timer not yet expired, continuing");
+            executor.setNodeNeedsMoreTime(true);
+            return true; // Важно! Возвращаем true, чтобы последовательность продолжалась
         }
-
-        for (String key : timerCompleted.keySet().toArray(new String[0])) {
-            if (key.startsWith(entityPrefix)) {
-                timerCompleted.remove(key);
-            }
-        }
-
-        LOGGER.info("TimerNodeExecutor: Cleaned up resources for entity {}", entityId);
     }
 }
