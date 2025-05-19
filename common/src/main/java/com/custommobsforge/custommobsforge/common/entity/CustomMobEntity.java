@@ -38,6 +38,7 @@ import org.apache.logging.log4j.Logger;
 
 import java.util.*;
 import java.util.concurrent.ConcurrentHashMap;
+import java.util.function.Consumer;
 
 public class CustomMobEntity extends PathfinderMob implements GeoEntity {
     private static final Logger LOGGER = LogManager.getLogger("CustomMobsForge");
@@ -53,6 +54,9 @@ public class CustomMobEntity extends PathfinderMob implements GeoEntity {
     // Поле для отслеживания времени запуска анимаций
     private final Map<String, Long> animationStartTimes = new ConcurrentHashMap<>();
 
+    // Карта для хранения коллбэков для анимаций
+    private final Map<String, Consumer<String>> animationCallbacks = new ConcurrentHashMap<>();
+
     // Поля для управления автоматическими анимациями
     private String lastPlayedAnimation = "";
     private long lastAnimationTime = 0;
@@ -64,6 +68,9 @@ public class CustomMobEntity extends PathfinderMob implements GeoEntity {
     // Набор приоритетных анимаций, которые не должны прерываться
     private static final Set<String> PRIORITY_ANIMATIONS = new HashSet<>(Arrays.asList(
             "ATTACK", "HURT", "DEATH", "SPECIAL_1", "SPECIAL_2"));
+
+    // Флаг для отключения автоматических анимаций
+    private boolean disableAutoAnimations = false;
 
     public CustomMobEntity(EntityType<? extends PathfinderMob> entityType, Level level) {
         super(entityType, level);
@@ -200,34 +207,50 @@ public class CustomMobEntity extends PathfinderMob implements GeoEntity {
         LOGGER.info("CustomMobEntity: Directly playing animation '{}' for entity {} (loop: {}, speed: {})",
                 animationName, this.getId(), loop, speed);
 
+        // Если анимация пустая, просто выходим
+        if (animationName == null || animationName.isEmpty()) {
+            LOGGER.warn("CustomMobEntity: Attempted to play empty animation for entity {}", this.getId());
+            return;
+        }
+
+        // Записываем время запуска
         animationStartTimes.put(animationName, System.currentTimeMillis());
 
+        // Генерируем событие начала анимации
         EventSystem.fireEvent(new AnimationStartedEvent(animationName, this));
 
         boolean canInterrupt = true;
 
-        if (!this.currentAnimation.isEmpty() && System.currentTimeMillis() - lastAnimationTime < 1000) {
-            if (mobData != null && mobData.getAnimations() != null) {
-                for (Map.Entry<String, AnimationMapping> entry : mobData.getAnimations().entrySet()) {
-                    if (PRIORITY_ANIMATIONS.contains(entry.getKey()) &&
-                            entry.getValue().getAnimationName().equals(currentAnimation)) {
+        // Проверяем, можно ли прерывать текущую анимацию
+        if (!this.currentAnimation.isEmpty() && !this.currentAnimation.equals(animationName)) {
+            if (!isLoopingAnimation && System.currentTimeMillis() - lastAnimationTime < 1000) {
+                LOGGER.info("CustomMobEntity: Checking if can interrupt current animation '{}'", currentAnimation);
 
-                        boolean newIsAlsoPriority = false;
-                        for (Map.Entry<String, AnimationMapping> newEntry : mobData.getAnimations().entrySet()) {
-                            if (PRIORITY_ANIMATIONS.contains(newEntry.getKey()) &&
-                                    newEntry.getValue().getAnimationName().equals(animationName)) {
-                                newIsAlsoPriority = true;
-                                break;
-                            }
+                // Проверяем, является ли текущая анимация приоритетной
+                boolean isCurrentPriority = false;
+                boolean isNewPriority = false;
+
+                if (mobData != null && mobData.getAnimations() != null) {
+                    for (Map.Entry<String, AnimationMapping> entry : mobData.getAnimations().entrySet()) {
+                        // Проверяем текущую анимацию
+                        if (PRIORITY_ANIMATIONS.contains(entry.getKey()) &&
+                                entry.getValue().getAnimationName().equals(currentAnimation)) {
+                            isCurrentPriority = true;
                         }
 
-                        if (!newIsAlsoPriority) {
-                            LOGGER.info("Not interrupting priority animation {} with non-priority {}",
-                                    currentAnimation, animationName);
-                            canInterrupt = false;
+                        // Проверяем новую анимацию
+                        if (PRIORITY_ANIMATIONS.contains(entry.getKey()) &&
+                                entry.getValue().getAnimationName().equals(animationName)) {
+                            isNewPriority = true;
                         }
-                        break;
                     }
+                }
+
+                // Не прерываем приоритетную анимацию не-приоритетной
+                if (isCurrentPriority && !isNewPriority) {
+                    LOGGER.info("Not interrupting priority animation {} with non-priority {}",
+                            currentAnimation, animationName);
+                    canInterrupt = false;
                 }
             }
         }
@@ -249,6 +272,28 @@ public class CustomMobEntity extends PathfinderMob implements GeoEntity {
             this.lastAnimationTime = System.currentTimeMillis();
             this.lastPlayedAnimation = animationName;
 
+            // Важно: После завершения незацикленной анимации мы должны автоматически
+            // вернуться к анимации IDLE
+            if (!loop) {
+                // Расчет времени, когда мы вернемся к IDLE
+                long returnToIdleTime = System.currentTimeMillis() + estimateAnimationDuration(animationName) + 100;
+
+                // Планируем переход к IDLE после завершения анимации
+                new Thread(() -> {
+                    try {
+                        Thread.sleep(returnToIdleTime - System.currentTimeMillis());
+
+                        // Проверяем, не запущена ли уже другая анимация
+                        if (this.currentAnimation.equals(animationName) && !this.level().isClientSide && !this.isRemoved()) {
+                            LOGGER.info("CustomMobEntity: Animation '{}' finished, returning to IDLE", animationName);
+                            this.playAnimation("IDLE");
+                        }
+                    } catch (InterruptedException e) {
+                        // Игнорируем
+                    }
+                }).start();
+            }
+
             forceAnimationRefresh();
 
             if (!this.level().isClientSide) {
@@ -263,6 +308,39 @@ public class CustomMobEntity extends PathfinderMob implements GeoEntity {
                     LOGGER.error("CustomMobEntity: ERROR sending animation sync packet: {}", e.getMessage());
                     e.printStackTrace();
                 }
+            }
+        }
+    }
+
+    // Добавьте этот метод в класс CustomMobEntity
+
+    /**
+     * Переходит к анимации IDLE, если не воспроизводится приоритетная анимация
+     */
+    public void transitionToIdleAnimation() {
+        if (currentAnimation.isEmpty() || isLoopingAnimation) {
+            if (!lastPlayedAnimation.equals("IDLE")) {
+                LOGGER.info("CustomMobEntity: Transitioning to IDLE animation for entity {}", this.getId());
+                this.playAnimation("IDLE");
+            }
+        } else {
+            // Проверяем, не является ли текущая анимация приоритетной
+            boolean isCurrentPriority = false;
+
+            if (mobData != null && mobData.getAnimations() != null) {
+                for (Map.Entry<String, AnimationMapping> entry : mobData.getAnimations().entrySet()) {
+                    if (PRIORITY_ANIMATIONS.contains(entry.getKey()) &&
+                            entry.getValue().getAnimationName().equals(currentAnimation)) {
+                        isCurrentPriority = true;
+                        break;
+                    }
+                }
+            }
+
+            if (!isCurrentPriority) {
+                LOGGER.info("CustomMobEntity: Current animation '{}' is not priority, transitioning to IDLE",
+                        currentAnimation);
+                this.playAnimation("IDLE");
             }
         }
     }
@@ -376,69 +454,121 @@ public class CustomMobEntity extends PathfinderMob implements GeoEntity {
 
     private int executionTicks = 0;
 
+    // Добавьте следующие методы в класс CustomMobEntity
+
+    private void updateAnimations() {
+        // Обновляем статус незацикленных анимаций
+        if (!this.currentAnimation.isEmpty() && !this.isLoopingAnimation) {
+            long startTime = getAnimationStartTime(this.currentAnimation);
+            long currentTime = System.currentTimeMillis();
+            long duration = estimateAnimationDuration(this.currentAnimation);
+
+            if (startTime > 0 && currentTime - startTime > duration) {
+                LOGGER.info("CustomMobEntity: Animation '{}' completed naturally after {} ms (duration estimate: {} ms)",
+                        this.currentAnimation, currentTime - startTime, duration);
+
+                // Сохраняем имя завершенной анимации
+                String completedAnimation = this.currentAnimation;
+
+                // Очищаем ссылку на текущую анимацию перед генерацией события
+                this.currentAnimation = "";
+
+                // Запускаем событие завершения анимации
+                EventSystem.fireEvent(new AnimationCompletedEvent(completedAnimation, this));
+
+                // Уведомляем коллбэки
+                notifyAnimationCallbacks(completedAnimation);
+
+                // Удаляем информацию о времени запуска
+                animationStartTimes.remove(completedAnimation);
+
+                LOGGER.info("CustomMobEntity: Reset current animation from '{}' to empty", completedAnimation);
+
+                // Если не включена блокировка автоанимаций, возвращаемся к IDLE
+                if (!disableAutoAnimations) {
+                    // Небольшая задержка перед переходом к IDLE
+                    try {
+                        Thread.sleep(50);
+                    } catch (InterruptedException e) {
+                        // Игнорируем
+                    }
+
+                    LOGGER.info("CustomMobEntity: Transitioning to IDLE after animation completion");
+                    playAnimation("IDLE");
+                }
+            }
+        }
+    }
+
+    /**
+     * Обновленный метод tick() с вызовом updateAnimations()
+     */
     @Override
     public void tick() {
         super.tick();
         executionTicks++;
 
+        // Загрузка данных моба при необходимости
         if (mobData == null && !this.level().isClientSide && this.getMobId() != null && !this.getMobId().isEmpty()) {
             if (this.level() instanceof ServerLevel) {
                 ServerLevel serverLevel = (ServerLevel) this.level();
-                System.out.println("CustomMobEntity: Attempting to load mob data for ID " + this.getMobId() +
+                LOGGER.info("CustomMobEntity: Attempting to load mob data for ID " + this.getMobId() +
                         " in tick() method");
 
                 com.custommobsforge.custommobsforge.common.config.MobConfigManager.init(serverLevel);
                 MobData mobData = com.custommobsforge.custommobsforge.common.config.MobConfigManager.loadMobConfig(this.getMobId(), serverLevel);
 
                 if (mobData != null) {
-                    System.out.println("CustomMobEntity: Successfully loaded mob data in tick() method");
+                    LOGGER.info("CustomMobEntity: Successfully loaded mob data in tick() method");
                     this.setMobData(mobData);
                 }
             }
         }
 
+        // Специальная обработка для только что созданного моба
         if (isNewlySpawned && mobData != null && !this.level().isClientSide) {
-            System.out.println("CustomMobEntity: Entity " + this.getId() + " is newly spawned, playing SPAWN animation");
+            LOGGER.info("CustomMobEntity: Entity " + this.getId() + " is newly spawned, playing SPAWN animation");
             this.playAnimation("SPAWN");
             isNewlySpawned = false;
+            // Устанавливаем флаг блокировки автоматических анимаций на короткое время
+            this.disableAutoAnimations = true;
             return;
         }
 
-        updateAnimationStatuses();
+        // Обновляем статус анимаций
+        updateAnimations();
 
-        boolean isPlayingPriorityAnimation = false;
-        if (!this.currentAnimation.isEmpty() && System.currentTimeMillis() - lastAnimationTime < 1500) {
-            if (mobData != null && mobData.getAnimations() != null) {
-                for (Map.Entry<String, AnimationMapping> entry : mobData.getAnimations().entrySet()) {
-                    if (PRIORITY_ANIMATIONS.contains(entry.getKey()) &&
-                            entry.getValue().getAnimationName().equals(currentAnimation)) {
-                        isPlayingPriorityAnimation = true;
-                        break;
-                    }
-                }
-            }
-            if (PRIORITY_ANIMATIONS.contains(lastPlayedAnimation)) {
-                isPlayingPriorityAnimation = true;
-            }
-        }
-
-        if (!this.level().isClientSide && mobData != null &&
+        // Обработка автоматических анимаций
+        if (!disableAutoAnimations && !this.level().isClientSide && mobData != null &&
                 System.currentTimeMillis() - lastAnimationTime > ANIMATION_COOLDOWN &&
-                !this.isDeadOrDying() && this.hurtTime <= 0 &&
-                !isPlayingPriorityAnimation) {
+                !this.isDeadOrDying() && this.hurtTime <= 0 && this.currentAnimation.isEmpty()) {
+
             double speed = this.getDeltaMovement().horizontalDistance();
             if (speed > 0.01) {
                 if (!lastPlayedAnimation.equals("WALK")) {
-                    System.out.println("CustomMobEntity: Entity " + this.getId() + " is moving, playing WALK animation");
+                    LOGGER.info("CustomMobEntity: Entity " + this.getId() + " is moving, playing WALK animation");
                     this.playAnimation("WALK");
                 }
             } else {
                 if (!lastPlayedAnimation.equals("IDLE")) {
-                    System.out.println("CustomMobEntity: Entity " + this.getId() + " is idle, playing IDLE animation");
+                    LOGGER.info("CustomMobEntity: Entity " + this.getId() + " is idle, playing IDLE animation");
                     this.playAnimation("IDLE");
                 }
             }
         }
+    }
+
+    // Вызывает все зарегистрированные колбэки для анимации
+    private void notifyAnimationCallbacks(String animationId) {
+        // Проходим по всем зарегистрированным коллбэкам
+        animationCallbacks.forEach((callbackId, callback) -> {
+            callback.accept(animationId);
+        });
+    }
+
+    // Метод для отключения автоматических анимаций (IDLE, WALK)
+    public void setDisableAutoAnimations(boolean disable) {
+        this.disableAutoAnimations = disable;
     }
 
     private void updateAnimationStatuses() {
@@ -477,6 +607,46 @@ public class CustomMobEntity extends PathfinderMob implements GeoEntity {
 
     public long getAnimationStartTime(String animationId) {
         return animationStartTimes.getOrDefault(animationId, 0L);
+    }
+
+    // Регистрирует коллбэк для анимации
+    public void registerAnimationCallback(String callbackId, Consumer<String> callback) {
+        animationCallbacks.put(callbackId, callback);
+        LOGGER.info("CustomMobEntity: Registered animation callback with ID {} for entity {}", callbackId, this.getId());
+    }
+
+    // Удаляет коллбэк
+    public void removeAnimationCallback(String callbackId) {
+        if (animationCallbacks.remove(callbackId) != null) {
+            LOGGER.info("CustomMobEntity: Removed animation callback with ID {} for entity {}", callbackId, this.getId());
+        }
+    }
+
+    // Проверяет, завершилась ли анимация
+    public boolean hasAnimationCompleted(String animationId) {
+        long startTime = getAnimationStartTime(animationId);
+        if (startTime == 0) {
+            return false;
+        }
+
+        long duration = estimateAnimationDuration(animationId);
+        return System.currentTimeMillis() - startTime > duration;
+    }
+
+    // Принудительно завершает анимацию
+    public void forceCompleteAnimation(String animationId) {
+        if (animationId.equals(currentAnimation)) {
+            LOGGER.info("CustomMobEntity: Forcing completion of animation {} for entity {}", animationId, this.getId());
+            EventSystem.fireEvent(new AnimationCompletedEvent(animationId, this));
+
+            // Уведомляем коллбэки
+            notifyAnimationCallbacks(animationId);
+
+            if (animationId.equals(currentAnimation)) {
+                // Если текущая анимация все еще та же, сбрасываем ее
+                this.currentAnimation = "";
+            }
+        }
     }
 
     @Override

@@ -3,10 +3,16 @@ package com.custommobsforge.custommobsforge.server.event;
 import com.custommobsforge.custommobsforge.common.config.MobConfigManager;
 import com.custommobsforge.custommobsforge.common.data.*;
 import com.custommobsforge.custommobsforge.common.entity.CustomMobEntity;
+import com.custommobsforge.custommobsforge.common.event.system.AnimationCompletedEvent;
+import com.custommobsforge.custommobsforge.common.event.system.AnimationStartedEvent;
+import com.custommobsforge.custommobsforge.common.event.system.EventSystem;
 import com.custommobsforge.custommobsforge.server.ai.BehaviorTreeExecutor;
+import com.custommobsforge.custommobsforge.server.ai.OnDamageNodeExecutor;
 import net.minecraft.server.level.ServerLevel;
+import net.minecraft.world.entity.Entity;
 import net.minecraft.world.entity.LivingEntity;
 import net.minecraft.world.entity.ai.goal.Goal;
+import net.minecraft.world.entity.player.Player;
 import net.minecraft.world.level.storage.LevelResource;
 import net.minecraftforge.event.entity.EntityJoinLevelEvent;
 import net.minecraftforge.event.entity.living.LivingDeathEvent;
@@ -16,8 +22,6 @@ import net.minecraftforge.fml.common.Mod;
 
 import com.google.gson.Gson;
 import com.google.gson.GsonBuilder;
-import org.json.JSONArray;
-import org.json.JSONObject;
 import org.apache.logging.log4j.LogManager;
 import org.apache.logging.log4j.Logger;
 
@@ -28,11 +32,15 @@ import java.nio.file.Path;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
+import java.util.concurrent.ConcurrentHashMap;
 
 @Mod.EventBusSubscriber
 public class MobSpawnEventHandler {
     private static final Logger LOGGER = LogManager.getLogger("CustomMobsForge");
     private static final Gson GSON = new GsonBuilder().create();
+
+    // Карта для отслеживания зарегистрированных мобов и их исполнителей
+    private static final Map<Integer, BehaviorTreeExecutor> entityExecutors = new ConcurrentHashMap<>();
 
     @SubscribeEvent
     public static void onEntityJoinWorld(EntityJoinLevelEvent event) {
@@ -89,6 +97,9 @@ public class MobSpawnEventHandler {
                 if (goal instanceof BehaviorTreeExecutor) {
                     hasExecutor = true;
                     LOGGER.info("!!! MobSpawnEventHandler: Entity already has BehaviorTreeExecutor");
+
+                    // Сохраняем ссылку на исполнитель
+                    entityExecutors.put(entity.getId(), (BehaviorTreeExecutor) goal);
                     break;
                 }
             }
@@ -96,6 +107,7 @@ public class MobSpawnEventHandler {
             // Если у моба уже есть исполнитель, пропускаем загрузку дерева
             if (hasExecutor) {
                 LOGGER.info("!!! MobSpawnEventHandler: Skipping behavior tree setup, entity already has executor");
+                registerEventHandlers(entity);
                 return;
             }
 
@@ -160,7 +172,14 @@ public class MobSpawnEventHandler {
 
                     BehaviorTreeExecutor executor = new BehaviorTreeExecutor(entity, mobData.getBehaviorTree());
                     entity.goalSelector.addGoal(1, executor);
+
+                    // Сохраняем ссылку на исполнитель
+                    entityExecutors.put(entity.getId(), executor);
+
                     LOGGER.info("!!! MobSpawnEventHandler: Added behavior tree executor for entity {}", entity.getId());
+
+                    // Регистрируем обработчики событий для моба
+                    registerEventHandlers(entity);
                 } else {
                     LOGGER.error("!!! MobSpawnEventHandler: ERROR - Cannot add behavior tree executor because tree has no nodes!");
                 }
@@ -171,7 +190,39 @@ public class MobSpawnEventHandler {
             // Воспроизводим анимацию появления
             LOGGER.info("!!! MobSpawnEventHandler: Playing SPAWN animation for entity {}", entity.getId());
             entity.playAnimation("SPAWN");
+
+            // Регистрируем моб в службе очистки
+            EntityCleanupService.registerEntity(entity);
         }
+    }
+
+    /**
+     * Регистрирует обработчики событий для моба
+     */
+    private static void registerEventHandlers(CustomMobEntity entity) {
+        LOGGER.info("MobSpawnEventHandler: Registering event handlers for entity {}", entity.getId());
+
+        // Регистрируем обработчик завершения анимации
+        EventSystem.registerListener(AnimationCompletedEvent.class, event -> {
+            if (event.getEntity().getId() == entity.getId()) {
+                LOGGER.info("MobSpawnEventHandler: Animation completed: {} for entity {}",
+                        event.getAnimationId(), entity.getId());
+
+                // Дополнительная логика обработки завершения анимации может быть добавлена здесь
+            }
+        });
+
+        // Регистрируем обработчик начала анимации
+        EventSystem.registerListener(AnimationStartedEvent.class, event -> {
+            if (event.getEntity().getId() == entity.getId()) {
+                LOGGER.info("MobSpawnEventHandler: Animation started: {} for entity {}",
+                        event.getAnimationId(), entity.getId());
+
+                // Дополнительная логика обработки начала анимации может быть добавлена здесь
+            }
+        });
+
+        LOGGER.info("MobSpawnEventHandler: Event handlers registered for entity {}", entity.getId());
     }
 
     /**
@@ -243,6 +294,16 @@ public class MobSpawnEventHandler {
 
             // Воспроизводим анимацию получения урона
             entity.playAnimation("HURT");
+
+            // Проверяем, от игрока ли урон
+            boolean isPlayerSource = false;
+            Entity source = event.getSource().getEntity();
+            if (source instanceof Player) {
+                isPlayerSource = true;
+            }
+
+            // Вызываем обработчик урона в OnDamageNodeExecutor
+            OnDamageNodeExecutor.handleDamageEvent(entity, event.getAmount(), isPlayerSource);
         }
     }
 
@@ -254,6 +315,9 @@ public class MobSpawnEventHandler {
 
             // Воспроизводим анимацию смерти
             entity.playAnimation("DEATH");
+
+            // Очищаем ресурсы для этого моба
+            EntityCleanupService.cleanup(entity.getId());
         }
     }
 }

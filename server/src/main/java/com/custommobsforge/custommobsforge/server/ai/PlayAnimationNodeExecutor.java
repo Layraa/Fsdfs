@@ -2,29 +2,35 @@ package com.custommobsforge.custommobsforge.server.ai;
 
 import com.custommobsforge.custommobsforge.common.data.BehaviorNode;
 import com.custommobsforge.custommobsforge.common.entity.CustomMobEntity;
+import com.custommobsforge.custommobsforge.common.event.system.AnimationCompletedEvent;
+import com.custommobsforge.custommobsforge.common.event.system.EventListener;
+import com.custommobsforge.custommobsforge.common.event.system.EventSystem;
 import org.apache.logging.log4j.LogManager;
 import org.apache.logging.log4j.Logger;
 
 import java.util.HashMap;
 import java.util.Map;
 import java.util.UUID;
+import java.util.concurrent.ConcurrentHashMap;
 
 public class PlayAnimationNodeExecutor implements NodeExecutor {
     private static final Logger LOGGER = LogManager.getLogger("CustomMobsForge");
 
-    // Карта для узлов и их анимаций
-    private static final Map<String, String> nodeAnimations = new HashMap<>();
+    // Карта для отслеживания состояния анимации для каждого узла и сущности
+    private static final Map<String, Boolean> animationStarted = new ConcurrentHashMap<>();
+    private static final Map<String, Long> animationStartTimes = new ConcurrentHashMap<>();
+    private static final Map<String, Boolean> animationCompleted = new ConcurrentHashMap<>();
 
-    // Карта для ID коллбэков
-    private static final Map<String, String> callbackIds = new HashMap<>();
+    // Карта для хранения слушателей событий
+    private static final Map<String, EventListener<AnimationCompletedEvent>> eventListeners = new ConcurrentHashMap<>();
 
     @Override
     public boolean execute(CustomMobEntity entity, BehaviorNode node, BehaviorTreeExecutor executor) {
         LOGGER.info("PlayAnimationNodeExecutor: Executing node {} of type {} for entity {}",
                 node.getId(), node.getType(), entity.getId());
 
-        // Логирование параметров узла
-        logNodeParameters(node);
+        // Уникальный ключ для узла+сущности
+        String nodeKey = entity.getId() + ":" + node.getId();
 
         // Получаем ID анимации
         String animationId = getAnimationId(node);
@@ -38,93 +44,124 @@ public class PlayAnimationNodeExecutor implements NodeExecutor {
         boolean loop = getLoopParameter(node);
         float speed = getSpeedParameter(node);
 
-        // Уникальный ключ для узла+сущности
-        String nodeKey = entity.getId() + ":" + node.getId();
+        // Отключаем автоматические анимации при выполнении этого узла
+        entity.setDisableAutoAnimations(true);
 
-        // Сохраняем анимацию для этого узла
-        nodeAnimations.put(nodeKey, animationId);
+        // Если анимация уже завершена, переходим к следующему узлу
+        if (animationCompleted.getOrDefault(nodeKey, false)) {
+            LOGGER.info("PlayAnimationNodeExecutor: Animation '{}' already completed for node {}, moving to next node",
+                    animationId, node.getId());
 
+            // Очищаем состояние
+            animationStarted.remove(nodeKey);
+            animationStartTimes.remove(nodeKey);
+            animationCompleted.remove(nodeKey);
 
-        // Проверяем, зациклена ли анимация
-            if (loop) {
-                // Зацикленные анимации просто запускаем и сразу возвращаем успех
-                LOGGER.info("PlayAnimationNodeExecutor: Playing looped animation '{}' and returning success", animationId);
+            // Удаляем слушатель событий если был зарегистрирован
+            EventListener<AnimationCompletedEvent> listener = eventListeners.remove(nodeKey);
+            if (listener != null) {
+                EventSystem.unregisterListener(AnimationCompletedEvent.class, listener);
+                LOGGER.info("PlayAnimationNodeExecutor: Unregistered event listener for {}", nodeKey);
+            }
+
+            // Сообщаем, что узел завершен успешно
+            executor.setNodeNeedsMoreTime(false);
+
+            // ВАЖНО: повторно активируем автоматические анимации
+            entity.setDisableAutoAnimations(false);
+
+            return true;
+        }
+
+        // Для зацикленных анимаций просто запускаем и завершаем узел
+        if (loop) {
+            if (!animationStarted.getOrDefault(nodeKey, false)) {
+                LOGGER.info("PlayAnimationNodeExecutor: Playing looped animation '{}' with speed {} and returning success",
+                        animationId, speed);
                 entity.playAnimationDirect(animationId, true, speed);
+                animationStarted.put(nodeKey, true);
+
+                // Для зацикленной анимации сразу отмечаем как завершенную
+                animationCompleted.put(nodeKey, true);
+            }
+
+            executor.setNodeNeedsMoreTime(false);
+
+            // ВАЖНО: повторно активируем автоматические анимации
+            entity.setDisableAutoAnimations(false);
+
+            return true;
+        }
+
+        // Для незацикленных анимаций - более сложная логика
+        if (!animationStarted.getOrDefault(nodeKey, false)) {
+            // Первое выполнение - запускаем анимацию
+            LOGGER.info("PlayAnimationNodeExecutor: First execution for animation '{}', starting it...", animationId);
+
+            // Регистрируем слушатель события завершения анимации
+            EventListener<AnimationCompletedEvent> listener = event -> {
+                if (event.getEntity().getId() == entity.getId() &&
+                        event.getAnimationId().equals(animationId)) {
+                    LOGGER.info("PlayAnimationNodeExecutor: Received completion event for animation '{}' on entity {}",
+                            animationId, entity.getId());
+                    animationCompleted.put(nodeKey, true);
+
+                    // ВАЖНО: повторно активируем автоматические анимации при завершении анимации
+                    entity.setDisableAutoAnimations(false);
+                }
+            };
+
+            EventSystem.registerListener(AnimationCompletedEvent.class, listener);
+            eventListeners.put(nodeKey, listener);
+
+            // Запускаем анимацию
+            entity.playAnimationDirect(animationId, false, speed);
+
+            // Отмечаем, что анимация запущена и записываем время запуска
+            animationStarted.put(nodeKey, true);
+            animationStartTimes.put(nodeKey, System.currentTimeMillis());
+
+            // Сообщаем, что узел нуждается в дополнительном времени
+            executor.setNodeNeedsMoreTime(true);
+            return true;
+        } else {
+            // Повторное выполнение - проверяем статус анимации
+            long currentTime = System.currentTimeMillis();
+            long startTime = animationStartTimes.getOrDefault(nodeKey, 0L);
+            long duration = entity.estimateAnimationDuration(animationId);
+
+            LOGGER.info("PlayAnimationNodeExecutor: Checking animation '{}' status: elapsed {} ms of {} ms estimated",
+                    animationId, (currentTime - startTime), duration);
+
+            // Если прошло достаточно времени, принудительно завершаем анимацию
+            if (currentTime - startTime > duration) {
+                LOGGER.info("PlayAnimationNodeExecutor: Animation '{}' should be completed by now, forcing completion",
+                        animationId);
+
+                // Проверяем, не завершена ли анимация уже
+                if (!animationCompleted.getOrDefault(nodeKey, false)) {
+                    // Принудительно генерируем событие завершения
+                    EventSystem.fireEvent(new AnimationCompletedEvent(animationId, entity));
+                }
+
+                // Принудительно отмечаем анимацию как завершенную
+                animationCompleted.put(nodeKey, true);
+
+                // ВАЖНО: повторно активируем автоматические анимации
+                entity.setDisableAutoAnimations(false);
+
+                // Переходим к следующему узлу немедленно
                 executor.setNodeNeedsMoreTime(false);
                 return true;
             }
 
-            // Проверяем, запускали ли мы уже эту анимацию для этого узла
-            if (!callbackIds.containsKey(nodeKey)) {
-                // Первый запуск - регистрируем коллбэк и запускаем анимацию
-                String callbackId = UUID.randomUUID().toString();
-                callbackIds.put(nodeKey, callbackId);
-
-                // Регистрируем коллбэк для отслеживания завершения анимации
-                registerAnimationCallback(entity, callbackId, animationId);
-
-                // Запускаем анимацию
-                LOGGER.info("PlayAnimationNodeExecutor: First execution, playing animation '{}'", animationId);
-
-                // НОВОЕ: задержка перед запуском новой анимации
-                try {
-                    Thread.sleep(50); // 50мс задержка, чтобы AzureLib успел обработать предыдущие анимации
-                } catch (InterruptedException e) {
-                    // Игнорируем прерывание
-                }
-
-                entity.playAnimationDirect(animationId, false, speed);
-
-                // Сообщаем, что нам нужно больше времени
-                executor.setNodeNeedsMoreTime(true);
-                return true;
-            } else {
-                // Последующие вызовы - проверяем, завершилась ли анимация
-                if (entity.hasAnimationCompleted(animationId)) {
-                    // Анимация завершилась - очищаем данные и двигаемся дальше
-                    LOGGER.info("PlayAnimationNodeExecutor: Animation '{}' has completed", animationId);
-
-                    // Удаляем коллбэк
-                    String callbackId = callbackIds.remove(nodeKey);
-                    entity.removeAnimationCallback(callbackId);
-
-                    // Удаляем запись об анимации
-                    nodeAnimations.remove(nodeKey);
-
-                    // Сообщаем, что нам больше не нужно времени
-                    executor.setNodeNeedsMoreTime(false);
-                    return true;
-                } else {
-                    // Анимация еще не завершилась - продолжаем ждать
-                    LOGGER.info("PlayAnimationNodeExecutor: Animation '{}' still in progress", animationId);
-
-                    // Проверяем, прошло ли достаточно времени с начала анимации
-                    long startTime = entity.getAnimationStartTime(animationId);
-                    long currentTime = System.currentTimeMillis();
-                    long duration = entity.estimateAnimationDuration(animationId);
-
-                    if (currentTime - startTime > duration * 1.5) {
-                        // Анимация, вероятно, зависла - принудительно завершаем ее
-                        LOGGER.warn("PlayAnimationNodeExecutor: Animation '{}' seems to be stuck, forcing completion", animationId);
-                        entity.forceCompleteAnimation(animationId);
-
-                        // Удаляем коллбэк
-                        String callbackId = callbackIds.remove(nodeKey);
-                        entity.removeAnimationCallback(callbackId);
-
-                        // Сообщаем, что нам больше не нужно времени
-                        executor.setNodeNeedsMoreTime(false);
-                        return true;
-                    }
-
-                    executor.setNodeNeedsMoreTime(true);
-                    return true;
-                }
-            }
+            // Анимация все еще выполняется
+            executor.setNodeNeedsMoreTime(true);
+            return true;
         }
+    }
 
-    // Вспомогательные методы
-
+    // Остальные вспомогательные методы остаются без изменений
     private void logNodeParameters(BehaviorNode node) {
         LOGGER.info("PlayAnimationNodeExecutor: Node parameters:");
         LOGGER.info("  - description: {}", node.getDescription());
@@ -233,16 +270,40 @@ public class PlayAnimationNodeExecutor implements NodeExecutor {
         return speed;
     }
 
-    private void registerAnimationCallback(CustomMobEntity entity, String callbackId, String animationId) {
-        // Регистрируем коллбэк для уведомления о завершении анимации
-        final String finalAnimationId = animationId;
+    // Метод для очистки ресурсов узла
+    public static void cleanup(int entityId) {
+        // Удаляем все записи для этой сущности
+        String entityPrefix = entityId + ":";
 
-        entity.registerAnimationCallback(callbackId, completedAnimId -> {
-            if (completedAnimId.equals(finalAnimationId)) {
-                LOGGER.info("PlayAnimationNodeExecutor: Animation callback triggered for '{}'", finalAnimationId);
+        // Очищаем карты, удаляя записи для этой сущности
+        for (String key : animationStarted.keySet().toArray(new String[0])) {
+            if (key.startsWith(entityPrefix)) {
+                animationStarted.remove(key);
             }
-        });
+        }
 
-        LOGGER.info("PlayAnimationNodeExecutor: Registered callback {} for animation '{}'", callbackId, animationId);
+        for (String key : animationStartTimes.keySet().toArray(new String[0])) {
+            if (key.startsWith(entityPrefix)) {
+                animationStartTimes.remove(key);
+            }
+        }
+
+        for (String key : animationCompleted.keySet().toArray(new String[0])) {
+            if (key.startsWith(entityPrefix)) {
+                animationCompleted.remove(key);
+            }
+        }
+
+        // Удаляем слушателей событий
+        for (String key : eventListeners.keySet().toArray(new String[0])) {
+            if (key.startsWith(entityPrefix)) {
+                EventListener<AnimationCompletedEvent> listener = eventListeners.remove(key);
+                if (listener != null) {
+                    EventSystem.unregisterListener(AnimationCompletedEvent.class, listener);
+                }
+            }
+        }
+
+        LOGGER.info("PlayAnimationNodeExecutor: Cleaned up resources for entity {}", entityId);
     }
 }
