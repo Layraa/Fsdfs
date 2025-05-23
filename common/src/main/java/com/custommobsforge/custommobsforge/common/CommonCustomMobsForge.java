@@ -11,9 +11,9 @@ import net.minecraftforge.fml.common.Mod;
 import net.minecraftforge.fml.event.lifecycle.FMLCommonSetupEvent;
 import net.minecraftforge.fml.javafmlmod.FMLJavaModLoadingContext;
 
-@Mod("custommobsforge_common")  // Изменено для соответствия mods.toml
+@Mod("custommobsforge_common")
 public class CommonCustomMobsForge {
-    public static final String MOD_ID = "custommobsforge_common";  // Также обновляем константу
+    public static final String MOD_ID = "custommobsforge_common";
 
     public CommonCustomMobsForge() {
         IEventBus modEventBus = FMLJavaModLoadingContext.get().getModEventBus();
@@ -21,23 +21,25 @@ public class CommonCustomMobsForge {
         // Регистрируем типы сущностей
         EntityRegistry.ENTITY_TYPES.register(modEventBus);
 
-        // Регистрируем обработчик общей настройки
+        // Регистрируем обработчики событий
         modEventBus.addListener(this::commonSetup);
-
-        // ДОБАВЛЕНО: Регистрируем обработчик атрибутов
         modEventBus.addListener(this::registerAttributes);
+
+        System.out.println("[CommonCustomMobsForge] Common module initialized");
     }
 
     private void commonSetup(final FMLCommonSetupEvent event) {
-        // Инициализируем менеджер сети
-        event.enqueueWork(NetworkManager::registerPackets);
+        // Инициализируем сетевые пакеты
+        event.enqueueWork(() -> {
+            NetworkManager.registerPackets();
+            System.out.println("[CommonCustomMobsForge] Network packets registered");
+        });
     }
 
-    // ДОБАВЛЕНО: Метод для регистрации атрибутов (раньше был только в серверном модуле)
     @SubscribeEvent
     public void registerAttributes(EntityAttributeCreationEvent event) {
         // Регистрируем атрибуты для нашего моба
         event.put(EntityRegistry.CUSTOM_MOB.get(), CustomMobEntity.createAttributes().build());
-        System.out.println("Registered attributes for custom_mob entity in COMMON module");
+        System.out.println("[CommonCustomMobsForge] Registered attributes for custom_mob entity");
     }
 }

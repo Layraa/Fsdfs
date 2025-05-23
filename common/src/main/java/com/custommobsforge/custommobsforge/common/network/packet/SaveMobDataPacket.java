@@ -1,7 +1,7 @@
 package com.custommobsforge.custommobsforge.common.network.packet;
 
 import com.custommobsforge.custommobsforge.common.data.MobData;
-import com.custommobsforge.custommobsforge.common.event.SaveMobDataEvent;
+import com.custommobsforge.custommobsforge.common.event.SaveConfigEvent;
 import net.minecraft.network.FriendlyByteBuf;
 import net.minecraft.server.level.ServerPlayer;
 import net.minecraftforge.common.MinecraftForge;
@@ -76,7 +76,7 @@ public class SaveMobDataPacket {
 
                     // Публикуем событие с полученными данными
                     boolean eventPosted = MinecraftForge.EVENT_BUS.post(
-                            new SaveMobDataEvent(message.getMobData(), player));
+                            new SaveConfigEvent(message.getMobData(), player));
 
                     // ДОБАВЛЕНО: Проверка результата публикации события
                     System.out.println("SaveMobDataEvent posted successfully: " + !eventPosted);

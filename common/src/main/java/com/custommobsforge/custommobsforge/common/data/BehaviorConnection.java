@@ -9,9 +9,7 @@ public class BehaviorConnection {
     private String sourceNodeId;
     private String targetNodeId;
 
-    // Конструкторы
     public BehaviorConnection() {
-        // Пустой конструктор для Gson
         this.id = UUID.randomUUID().toString();
     }
 
@@ -21,7 +19,6 @@ public class BehaviorConnection {
         this.targetNodeId = targetNodeId;
     }
 
-    // Геттеры и сеттеры
     public String getId() { return id; }
     public void setId(String id) { this.id = id; }
 
@@ -31,7 +28,6 @@ public class BehaviorConnection {
     public String getTargetNodeId() { return targetNodeId; }
     public void setTargetNodeId(String targetNodeId) { this.targetNodeId = targetNodeId; }
 
-    // Методы сериализации
     public void writeToBuffer(FriendlyByteBuf buffer) {
         buffer.writeUtf(id);
         buffer.writeUtf(sourceNodeId);

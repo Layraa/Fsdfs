@@ -28,16 +28,11 @@ public class NetworkManager {
                 PROTOCOL_VERSION::equals
         );
 
-        // Существующие пакеты
+        // Основные пакеты
         INSTANCE.registerMessage(nextId(), SpawnMobPacket.class,
                 SpawnMobPacket::encode,
                 SpawnMobPacket::decode,
                 SpawnMobPacket::handle);
-
-        INSTANCE.registerMessage(nextId(), RequestMobDataPacket.class,
-                RequestMobDataPacket::encode,
-                RequestMobDataPacket::decode,
-                RequestMobDataPacket::handle);
 
         INSTANCE.registerMessage(nextId(), MobDataPacket.class,
                 MobDataPacket::encode,
@@ -49,31 +44,17 @@ public class NetworkManager {
                 AnimationSyncPacket::decode,
                 AnimationSyncPacket::handle);
 
-        INSTANCE.registerMessage(nextId(), PlayBehaviorNodePacket.class,
-                PlayBehaviorNodePacket::encode,
-                PlayBehaviorNodePacket::decode,
-                PlayBehaviorNodePacket::handle);
+        // Пакеты для GUI
+        INSTANCE.registerMessage(nextId(), RequestDataPacket.class,
+                RequestDataPacket::encode,
+                RequestDataPacket::decode,
+                RequestDataPacket::handle);
 
-        INSTANCE.registerMessage(nextId(), RequestMobListPacket.class,
-                RequestMobListPacket::encode,
-                RequestMobListPacket::decode,
-                RequestMobListPacket::handle);
+        INSTANCE.registerMessage(nextId(), SaveConfigPacket.class,
+                SaveConfigPacket::encode,
+                SaveConfigPacket::decode,
+                SaveConfigPacket::handle);
 
-        // Зарегистрировать новые пакеты
-        INSTANCE.registerMessage(nextId(), SaveMobDataPacket.class,
-                SaveMobDataPacket::encode,
-                SaveMobDataPacket::decode,
-                SaveMobDataPacket::handle);
-
-        INSTANCE.registerMessage(nextId(), SaveBehaviorTreePacket.class,
-                SaveBehaviorTreePacket::encode,
-                SaveBehaviorTreePacket::decode,
-                SaveBehaviorTreePacket::handle);
-
-        // Новый пакет для синхронизации состояний
-        INSTANCE.registerMessage(nextId(), StateUpdatePacket.class,
-                StateUpdatePacket::encode,
-                StateUpdatePacket::decode,
-                StateUpdatePacket::handle);
+        System.out.println("[NetworkManager] Registered " + packetId + " network packets");
     }
 }

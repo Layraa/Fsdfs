@@ -7,7 +7,6 @@ import net.minecraft.network.FriendlyByteBuf;
 
 import java.util.HashMap;
 import java.util.Map;
-import java.util.UUID;
 
 public class MobData {
     private static final Gson GSON = new GsonBuilder().create();
@@ -18,7 +17,7 @@ public class MobData {
     private String texturePath;
     private String animationFilePath;
     private Map<String, AnimationMapping> animations = new HashMap<>();
-    private BehaviorTree behaviorTree;
+    private BehaviorTree behaviorTree;  // ВОЗВРАЩАЕМ
     private Map<String, Float> attributes = new HashMap<>();
 
     // Конструкторы
@@ -50,8 +49,8 @@ public class MobData {
     public Map<String, AnimationMapping> getAnimations() { return animations; }
     public void setAnimations(Map<String, AnimationMapping> animations) { this.animations = animations; }
 
-    public BehaviorTree getBehaviorTree() { return behaviorTree; }
-    public void setBehaviorTree(BehaviorTree behaviorTree) { this.behaviorTree = behaviorTree; }
+    public BehaviorTree getBehaviorTree() { return behaviorTree; }  // ВОЗВРАЩАЕМ
+    public void setBehaviorTree(BehaviorTree behaviorTree) { this.behaviorTree = behaviorTree; }  // ВОЗВРАЩАЕМ
 
     public Map<String, Float> getAttributes() { return attributes; }
     public void setAttributes(Map<String, Float> attributes) { this.attributes = attributes; }
@@ -78,7 +77,7 @@ public class MobData {
             entry.getValue().writeToBuffer(buffer);
         }
 
-        // Сериализуем дерево поведения если оно есть
+        // ВОЗВРАЩАЕМ: Сериализуем дерево поведения если оно есть
         buffer.writeBoolean(behaviorTree != null);
         if (behaviorTree != null) {
             behaviorTree.writeToBuffer(buffer);
@@ -109,7 +108,7 @@ public class MobData {
             data.animations.put(key, mapping);
         }
 
-        // Десериализуем дерево поведения если оно есть
+        // ВОЗВРАЩАЕМ: Десериализуем дерево поведения если оно есть
         boolean hasBehaviorTree = buffer.readBoolean();
         if (hasBehaviorTree) {
             data.behaviorTree = BehaviorTree.readFromBuffer(buffer);
@@ -136,7 +135,7 @@ public class MobData {
         // Сохраняем анимации как JSON
         tag.putString("animations", GSON.toJson(animations));
 
-        // Сохраняем дерево поведения как JSON
+        // ВОЗВРАЩАЕМ: Сохраняем дерево поведения как JSON
         if (behaviorTree != null) {
             tag.putString("behaviorTree", GSON.toJson(behaviorTree));
         }
@@ -162,7 +161,6 @@ public class MobData {
         String animationsJson = tag.getString("animations");
         if (!animationsJson.isEmpty()) {
             try {
-                // Используем рефлексию для преобразования JSON в Map
                 @SuppressWarnings("unchecked")
                 Map<String, AnimationMapping> animations = GSON.fromJson(
                         animationsJson,
@@ -174,7 +172,7 @@ public class MobData {
             }
         }
 
-        // Загружаем дерево поведения из JSON
+        // ВОЗВРАЩАЕМ: Загружаем дерево поведения из JSON
         if (tag.contains("behaviorTree")) {
             String behaviorTreeJson = tag.getString("behaviorTree");
             if (!behaviorTreeJson.isEmpty()) {

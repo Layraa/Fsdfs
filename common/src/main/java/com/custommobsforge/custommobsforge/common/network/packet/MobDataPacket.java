@@ -1,8 +1,11 @@
 package com.custommobsforge.custommobsforge.common.network.packet;
 
 import com.custommobsforge.custommobsforge.common.data.MobData;
+import com.custommobsforge.custommobsforge.common.config.ClientMobDataCache;
 import net.minecraft.network.FriendlyByteBuf;
 import net.minecraftforge.network.NetworkEvent;
+import net.minecraftforge.api.distmarker.Dist;
+import net.minecraftforge.fml.DistExecutor;
 
 import java.util.function.Supplier;
 
@@ -25,6 +28,11 @@ public class MobDataPacket {
         NetworkEvent.Context context = contextSupplier.get();
 
         context.enqueueWork(() -> {
+            // На клиенте кэшируем данные моба
+            DistExecutor.unsafeRunWhenOn(Dist.CLIENT, () -> () -> {
+                ClientMobDataCache.cacheMobData(message.mobData);
+            });
+
             // Публикуем событие получения данных моба
             net.minecraftforge.common.MinecraftForge.EVENT_BUS.post(
                     new com.custommobsforge.custommobsforge.common.event.MobDataReceivedEvent(message.mobData)
