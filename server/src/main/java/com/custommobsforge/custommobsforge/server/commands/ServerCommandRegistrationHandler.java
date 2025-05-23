@@ -23,6 +23,8 @@ public class ServerCommandRegistrationHandler {
     public static void onRegisterCommands(RegisterCommandsEvent event) {
         CommandDispatcher<CommandSourceStack> dispatcher = event.getDispatcher();
 
+        DebugCommands.register(dispatcher);
+
         // Регистрируем команду для спавна кастомных мобов
         dispatcher.register(
                 Commands.literal("custommob")

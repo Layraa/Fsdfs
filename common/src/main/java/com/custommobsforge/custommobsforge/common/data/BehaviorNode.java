@@ -25,7 +25,6 @@ public class BehaviorNode {
 
     // Конструкторы
     public BehaviorNode() {
-        // Пустой конструктор для Gson
         this.id = UUID.randomUUID().toString();
     }
 
@@ -69,7 +68,6 @@ public class BehaviorNode {
     public Map<String, Object> getCustomParameters() { return customParameters; }
     public void setCustomParameters(Map<String, Object> customParameters) { this.customParameters = customParameters; }
 
-    // Методы для работы с параметрами
     public void setCustomParameter(String key, Object value) {
         customParameters.put(key, value);
     }
@@ -117,18 +115,15 @@ public class BehaviorNode {
         buffer.writeDouble(y);
         buffer.writeBoolean(expanded);
 
-        // Записываем параметры анимации
         buffer.writeUtf(animationId != null ? animationId : "");
         buffer.writeDouble(animationSpeed);
         buffer.writeBoolean(loopAnimation);
 
-        // Параметры узла в формате String
         Map<String, String> stringParameters = new HashMap<>();
         for (Map.Entry<String, Object> entry : customParameters.entrySet()) {
             stringParameters.put(entry.getKey(), entry.getValue().toString());
         }
 
-        // Записываем количество параметров и сами параметры
         buffer.writeInt(stringParameters.size());
         for (Map.Entry<String, String> entry : stringParameters.entrySet()) {
             buffer.writeUtf(entry.getKey());
@@ -146,12 +141,10 @@ public class BehaviorNode {
         node.y = buffer.readDouble();
         node.expanded = buffer.readBoolean();
 
-        // Читаем параметры анимации
         node.animationId = buffer.readUtf();
         node.animationSpeed = buffer.readDouble();
         node.loopAnimation = buffer.readBoolean();
 
-        // Читаем пользовательские параметры
         int paramCount = buffer.readInt();
         for (int i = 0; i < paramCount; i++) {
             String key = buffer.readUtf();
